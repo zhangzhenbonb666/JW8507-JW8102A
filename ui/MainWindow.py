@@ -101,6 +101,7 @@ class MainWindow(QMainWindow):
             "SetChannelMode",
             "SetTarget",
             "SetMinAtt",
+            "SetPowerMeterChannel",
             "StartFormula",
             "StopFormula",
             "GetChannelStatus",
@@ -189,6 +190,16 @@ class MainWindow(QMainWindow):
             widget.set_min_att(min_att, persist=False)
             self._save_channel_config(channel_num, "min_att", min_att)
             return [True, "", "Min ATT set successfully"]
+
+        if opcode == "SetPowerMeterChannel":
+            if "PMChannel" not in parameter:
+                return [False, "", "Missing PMChannel"]
+            pm_channel = parameter["PMChannel"]
+            success = widget.set_power_meter_channel(pm_channel, persist=False)
+            if not success:
+                return [False, "", "Invalid power meter channel"]
+            self._save_channel_config(channel_num, "pm_channel", widget.power_meter_channel)
+            return [True, "", "Power meter channel set successfully"]
 
         if opcode == "StartFormula":
             return [widget.start_formula(), "", "Formula start requested"]
@@ -879,6 +890,7 @@ class MainWindow(QMainWindow):
         channel_roles = self.config.get("channel_roles", {})
         channel_targets = self.config.get("channel_targets", {})
         channel_min_att = self.config.get("channel_min_att", {})
+        channel_pm_mapping = self.config.get("channel_pm_mapping", {})
         formula_interval = self.config.get("formula_interval_ms", 1000)
         
         # 添加通道控件
@@ -889,7 +901,7 @@ class MainWindow(QMainWindow):
                 jw8507=self.jw8507,
                 refresh_interval=refresh_interval,
                 power_bridge=self.power_bridge,
-                power_meter_channel=i - 1,
+                power_meter_channel=channel_pm_mapping.get(channel_key),
                 initial_mode=channel_roles.get(channel_key, "output"),
                 target=channel_targets.get(channel_key, -25.0),
                 min_att=channel_min_att.get(channel_key, 0.0),
@@ -914,6 +926,7 @@ class MainWindow(QMainWindow):
             "mode": "channel_roles",
             "target": "channel_targets",
             "min_att": "channel_min_att",
+            "pm_channel": "channel_pm_mapping",
         }
         config_key = config_key_map.get(field)
         if config_key is None:

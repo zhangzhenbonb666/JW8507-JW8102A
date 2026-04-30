@@ -156,12 +156,22 @@ class ChannelWidget(QWidget):
         target_btn.setObjectName("primaryBtn")
         min_btn.setObjectName("primaryBtn")
 
-        grid.addWidget(QLabel("目标值(dBm):"), 0, 0)
-        grid.addWidget(target_edit, 0, 1)
-        grid.addWidget(target_btn, 0, 2)
-        grid.addWidget(QLabel("ATT 最小值:"), 1, 0)
-        grid.addWidget(min_edit, 1, 1)
-        grid.addWidget(min_btn, 1, 2)
+        parameter_row = 0
+        if mode == "input":
+            parameter_row = 1
+            self.pm_channel_combo = QComboBox()
+            self.pm_channel_combo.setFixedWidth(140)
+            self._populate_pm_channel_combo()
+            self._sync_pm_channel_combo()
+            grid.addWidget(QLabel("功率计通道:"), 0, 0)
+            grid.addWidget(self.pm_channel_combo, 0, 1)
+
+        grid.addWidget(QLabel("目标值(dBm):"), parameter_row, 0)
+        grid.addWidget(target_edit, parameter_row, 1)
+        grid.addWidget(target_btn, parameter_row, 2)
+        grid.addWidget(QLabel("ATT 最小值:"), parameter_row + 1, 0)
+        grid.addWidget(min_edit, parameter_row + 1, 1)
+        grid.addWidget(min_btn, parameter_row + 1, 2)
 
         value_title = "当前 OPM:" if mode == "output" else "功率计读数(x):"
         value_label = QLabel("0.00 dBm")
@@ -190,7 +200,7 @@ class ChannelWidget(QWidget):
         btn_layout.addWidget(stop_btn)
         btn_layout.addWidget(alarm_label)
         btn_layout.addStretch()
-        grid.addLayout(btn_layout, 2, 0, 1, 3)
+        grid.addLayout(btn_layout, parameter_row + 2, 0, 1, 3)
 
         if mode == "output":
             self.output_target_input = target_edit
@@ -214,8 +224,34 @@ class ChannelWidget(QWidget):
             self.input_start_btn = start_btn
             self.input_stop_btn = stop_btn
             self.input_alarm_label = alarm_label
+            self.pm_channel_combo.currentIndexChanged.connect(self._on_pm_channel_changed)
 
         return group
+
+    def _populate_pm_channel_combo(self):
+        self.pm_channel_combo.blockSignals(True)
+        self.pm_channel_combo.clear()
+        self.pm_channel_combo.addItem("请选择通道", None)
+
+        count = 4
+        if self.power_bridge is not None and hasattr(self.power_bridge, "get_channel_count"):
+            count = self.power_bridge.get_channel_count()
+
+        for index in range(count):
+            self.pm_channel_combo.addItem(f"功率计 CH{index + 1}", index)
+        self.pm_channel_combo.blockSignals(False)
+
+    def _sync_pm_channel_combo(self):
+        if not hasattr(self, "pm_channel_combo"):
+            return
+        self.pm_channel_combo.blockSignals(True)
+        target_index = 0
+        for index in range(self.pm_channel_combo.count()):
+            if self.pm_channel_combo.itemData(index) == self.power_meter_channel:
+                target_index = index
+                break
+        self.pm_channel_combo.setCurrentIndex(target_index)
+        self.pm_channel_combo.blockSignals(False)
 
     def _create_common_controls(self):
         group = QGroupBox("通用控制")
@@ -330,7 +366,11 @@ class ChannelWidget(QWidget):
             self._emit_log(f"通道 {self.address} 读取初始数据失败: {exc}")
 
     def refresh_display(self):
-        if self.mode == "input" and self.power_bridge is not None:
+        if (
+            self.mode == "input"
+            and self.power_bridge is not None
+            and self.power_meter_channel is not None
+        ):
             self._update_input_power(self.power_bridge.get_power(self.power_meter_channel))
 
         try:
@@ -385,12 +425,33 @@ class ChannelWidget(QWidget):
             self.config_changed.emit(self.address, "min_att", self.min_att)
         return True
 
+    def set_power_meter_channel(self, channel_index, persist: bool = True):
+        if channel_index is None:
+            self.power_meter_channel = None
+        else:
+            channel_index = int(channel_index)
+            max_count = 4
+            if self.power_bridge is not None and hasattr(self.power_bridge, "get_channel_count"):
+                max_count = self.power_bridge.get_channel_count()
+            if channel_index < 0 or channel_index >= max_count:
+                return False
+            self.power_meter_channel = channel_index
+
+        self._sync_pm_channel_combo()
+        if persist:
+            self.config_changed.emit(self.address, "pm_channel", self.power_meter_channel)
+        return True
+
     def start_formula(self):
         if self._formula_running():
             return True
-        if self.mode == "input" and self.power_bridge is None:
-            self._emit_log(f"通道 {self.address} 输入模式缺少功率计桥接器")
-            return False
+        if self.mode == "input":
+            if self.power_bridge is None:
+                self._emit_log(f"通道 {self.address} 输入模式缺少功率计桥接器")
+                return False
+            if self.power_meter_channel is None:
+                QMessageBox.warning(self, "提示", "请先选择要读取的功率计通道", QMessageBox.Ok)
+                return False
 
         try:
             thread = AttFormulaThread(
@@ -441,9 +502,15 @@ class ChannelWidget(QWidget):
             "Attenuation": self.current_attenuation,
             "OPM": self.latest_opm,
             "InputPower": self.latest_input_power,
+            "PMChannel": self.power_meter_channel,
             "FormulaRunning": self._formula_running(),
             "Alarm": self.alarm_active,
         }
+
+    def _on_pm_channel_changed(self, _index=None):
+        if not hasattr(self, "pm_channel_combo"):
+            return
+        self.set_power_meter_channel(self.pm_channel_combo.currentData())
 
     def _on_set_target(self):
         edit = self.output_target_input if self.mode == "output" else self.input_target_input
@@ -569,6 +636,7 @@ class ChannelWidget(QWidget):
             self.input_target_btn,
             self.input_min_att_input,
             self.input_min_att_btn,
+            self.pm_channel_combo,
             self.set_wave_btn,
             self.set_atten_btn,
             self.close_btn,

@@ -16,6 +16,10 @@ DEFAULT_CHANNEL_TARGETS["2"] = -47.0
 
 DEFAULT_CHANNEL_MIN_ATT = {str(index): 0.0 for index in range(1, 9)}
 
+DEFAULT_CHANNEL_PM_MAPPING = {str(index): None for index in range(1, 9)}
+DEFAULT_CHANNEL_PM_MAPPING["1"] = 0
+DEFAULT_CHANNEL_PM_MAPPING["2"] = 1
+
 DEFAULT_CONFIG = {
     "_comment": "===== JW8507 衰减器配置 =====",
     "channel_count": 2,
@@ -27,6 +31,7 @@ DEFAULT_CONFIG = {
     "channel_roles": DEFAULT_CHANNEL_ROLES,
     "channel_targets": DEFAULT_CHANNEL_TARGETS,
     "channel_min_att": DEFAULT_CHANNEL_MIN_ATT,
+    "channel_pm_mapping": DEFAULT_CHANNEL_PM_MAPPING,
     "formula_interval_ms": 1000,
     "_comment2": "===== JW8103A 功率计配置 =====",
     "power_meter_port": "COM1",
@@ -137,6 +142,7 @@ def get_device_config(device_type: str) -> dict[str, Any]:
             "channel_roles",
             "channel_targets",
             "channel_min_att",
+            "channel_pm_mapping",
             "formula_interval_ms",
             "server_address",
             "server_port",
