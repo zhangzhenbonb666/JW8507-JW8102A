@@ -8,6 +8,14 @@ from typing import Any
 ROOT_DIR = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT_DIR / "config.json"
 
+DEFAULT_CHANNEL_ROLES = {str(index): "output" for index in range(1, 9)}
+DEFAULT_CHANNEL_ROLES["2"] = "input"
+
+DEFAULT_CHANNEL_TARGETS = {str(index): -25.0 for index in range(1, 9)}
+DEFAULT_CHANNEL_TARGETS["2"] = -47.0
+
+DEFAULT_CHANNEL_MIN_ATT = {str(index): 0.0 for index in range(1, 9)}
+
 DEFAULT_CONFIG = {
     "_comment": "===== JW8507 衰减器配置 =====",
     "channel_count": 2,
@@ -15,6 +23,11 @@ DEFAULT_CONFIG = {
     "serial_timeout": 0.1,
     "serial_port": "",
     "refresh_interval_ms": 500,
+    "_comment_channel_config": "===== 通道公式配置 =====",
+    "channel_roles": DEFAULT_CHANNEL_ROLES,
+    "channel_targets": DEFAULT_CHANNEL_TARGETS,
+    "channel_min_att": DEFAULT_CHANNEL_MIN_ATT,
+    "formula_interval_ms": 1000,
     "_comment2": "===== JW8103A 功率计配置 =====",
     "power_meter_port": "COM1",
     "tcp_server_port": 1234,
@@ -40,7 +53,11 @@ _SECTION_KEY_MAP = {
 def _merge_defaults(config: dict[str, Any] | None) -> dict[str, Any]:
     merged = deepcopy(DEFAULT_CONFIG)
     if config:
-        merged.update(config)
+        for key, value in config.items():
+            if isinstance(merged.get(key), dict) and isinstance(value, dict):
+                merged[key].update(value)
+            else:
+                merged[key] = value
     return merged
 
 
@@ -117,6 +134,10 @@ def get_device_config(device_type: str) -> dict[str, Any]:
             "serial_timeout",
             "serial_port",
             "refresh_interval_ms",
+            "channel_roles",
+            "channel_targets",
+            "channel_min_att",
+            "formula_interval_ms",
             "server_address",
             "server_port",
             "log_retention_days",

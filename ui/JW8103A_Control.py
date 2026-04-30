@@ -42,6 +42,7 @@ from ui.MyPlot import MyPlot
 from utils.LatencyTimerSet import SetLatencyTimer, check_is_FTDI_port
 from utils.config import edit_config, ensure_config_defaults, load_app_config, read_config, save_app_config
 from utils.logger import setup_file_logger
+from utils.数据桥接器 import PowerMeterBridge
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtWidgets import QMessageBox
@@ -110,9 +111,10 @@ class JW8103A_Control(QtWidgets.QMainWindow, Ui_MainWindow):
     value_update = pyqtSignal(list)  # 功率值更新信号，传递4通道功率列表
     value_save = pyqtSignal(list)    # 功率值保存信号
 
-    def __init__(self, parent=None, embedded=False):
+    def __init__(self, parent=None, embedded=False, power_bridge=None):
         super(JW8103A_Control, self).__init__(parent)
         self.embedded = embedded
+        self.power_bridge = power_bridge or PowerMeterBridge.get_instance()
         self.setupUi(self)
         self.setWindowTitle(f"嘉慧功率计控制程序 {VERSION}")
         self.version.setText(f"版本：{VERSION}")
@@ -618,6 +620,7 @@ class JW8103A_Control(QtWidgets.QMainWindow, Ui_MainWindow):
                         result = result["Value"]
                     if result not in [[], None]:
                         self.Power_Buffer = result
+                        self.power_bridge.update_all_powers(result)
                         if counter % 10 == 0:
                             counter = 0
                             self.value_update.emit(result)

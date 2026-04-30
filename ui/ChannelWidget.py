@@ -1,582 +1,796 @@
 """
-JW8507 单通道控制界面组件
+JW8507 单通道控制界面组件。
 """
-from PyQt5.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QLabel, 
-    QComboBox, QPushButton, QLineEdit, QLCDNumber,
-    QFrame, QGroupBox, QSizePolicy, QMessageBox
-)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QFont, QDoubleValidator, QPalette, QColor
+from PyQt5.QtGui import QDoubleValidator
+from PyQt5.QtWidgets import (
+    QWidget,
+    QHBoxLayout,
+    QVBoxLayout,
+    QGridLayout,
+    QLabel,
+    QComboBox,
+    QPushButton,
+    QLineEdit,
+    QLCDNumber,
+    QFrame,
+    QGroupBox,
+    QSizePolicy,
+    QMessageBox,
+    QRadioButton,
+    QButtonGroup,
+)
+
+from ui.通道公式线程 import AttFormulaThread
 from devices.JW8507 import JW8507
 
 
+class AlarmMessageBox(QMessageBox):
+    """报警解除前不允许用户手动关闭的提示框。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._allow_close = False
+
+    def allow_close(self):
+        self._allow_close = True
+
+    def prevent_close(self):
+        self._allow_close = False
+
+    def closeEvent(self, event):
+        if self._allow_close:
+            super().closeEvent(event)
+        else:
+            event.ignore()
+
+    def reject(self):
+        if self._allow_close:
+            super().reject()
+
+
 class ChannelWidget(QWidget):
-    """
-    JW8507 单通道控制界面组件
-    
-    可复制使用，每个实例控制一个通道
-    
-    :param address: 通道地址 (0x01 - 0x08)
-    :param jw8507: JW8507控制类实例
-    :param parent: 父窗口
-    """
-    
-    # 日志信号，用于将操作日志发送到主界面
+    """JW8507 单通道控制界面组件。"""
+
     log_signal = pyqtSignal(str)
-    
-    def __init__(self, address: int, jw8507: JW8507, refresh_interval: int = 500, parent=None):
-        """
-        初始化通道控件
-        
-        :param address: 通道地址
-        :param jw8507: JW8507控制类实例
-        :param refresh_interval: 刷新间隔（毫秒），默认500ms
-        :param parent: 父窗口
-        """
+    alarm_signal = pyqtSignal(int, str)
+    config_changed = pyqtSignal(int, str, object)
+
+    def __init__(
+        self,
+        address: int,
+        jw8507: JW8507,
+        refresh_interval: int = 500,
+        power_bridge=None,
+        power_meter_channel=None,
+        initial_mode: str = "output",
+        target: float = -25.0,
+        min_att: float = 0.0,
+        formula_interval_ms: int = 1000,
+        parent=None,
+    ):
         super().__init__(parent)
         self.address = address
         self.jw8507 = jw8507
-        self.current_attenuation = 0.0
         self.refresh_interval = refresh_interval
-        self._last_refresh_failed = False  # 用于避免频繁输出错误日志
-        
+        self.power_bridge = power_bridge
+        self.power_meter_channel = power_meter_channel
+        self.formula_interval_ms = formula_interval_ms
+
+        self.mode = initial_mode if initial_mode in ("output", "input") else "output"
+        self.target = float(target)
+        self.min_att = max(0.0, float(min_att))
+        self.current_attenuation = 0.0
+        self.latest_opm = 0.0
+        self.latest_input_power = 0.0
+        self.formula_thread = None
+        self.alarm_active = False
+        self._alarm_dialog = None
+        self._last_refresh_failed = False
+        self._wavelength_missing_logged = False
+
         self._init_ui()
         self._connect_signals()
+        self._apply_mode_to_ui()
         self._setup_refresh_timer()
         self._load_initial_data()
-        
+
     def _init_ui(self):
-        """初始化UI"""
-        # 设置固定高度，防止垂直方向缩放
-        self.setFixedHeight(62)
-        self.setMinimumWidth(720)
-        
-        # 设置 SizePolicy
+        self.setMinimumWidth(760)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        
-        # 主布局 - 水平布局
-        main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(6, 4, 6, 4)
-        main_layout.setSpacing(8)
-        
-        # 设置整体样式 - 工程软件风格
-        self.setStyleSheet("""
-            ChannelWidget {
-                background-color: #f5f5f5;
-                border: 1px solid #c0c0c0;
-                border-radius: 2px;
-            }
-            QLabel {
-                color: #333333;
-                font-family: "SimHei", "黑体";
-                font-size: 14px;
-                border: none;
-                background: transparent;
-            }
-            QComboBox {
-                background-color: #ffffff;
-                color: #333333;
-                border: 1px solid #a0a0a0;
-                border-radius: 2px;
-                padding: 4px 8px;
-                font-family: "SimHei", "黑体";
-                font-size: 14px;
-            }
-            QComboBox:hover {
-                border-color: #0078d4;
-            }
-            QComboBox:focus {
-                border-color: #0078d4;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 18px;
-                subcontrol-position: right center;
-            }
-            QComboBox::down-arrow {
-                image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 5px solid #666666;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #ffffff;
-                color: #333333;
-                selection-background-color: #0078d4;
-                selection-color: #ffffff;
-                border: 1px solid #a0a0a0;
-                outline: none;
-                font-family: "SimHei", "黑体";
-                font-size: 14px;
-            }
-            QLineEdit {
-                background-color: #ffffff;
-                color: #333333;
-                border: 1px solid #a0a0a0;
-                border-radius: 2px;
-                padding: 4px 6px;
-                font-family: "SimHei", "黑体";
-                font-size: 14px;
-            }
-            QLineEdit:hover {
-                border-color: #0078d4;
-            }
-            QLineEdit:focus {
-                border-color: #0078d4;
-            }
-            QPushButton {
-                background-color: #e1e1e1;
-                color: #333333;
-                border: 1px solid #a0a0a0;
-                border-radius: 2px;
-                padding: 4px 12px;
-                font-family: "SimHei", "黑体";
-                font-size: 13px;
-                font-weight: 500;
-            }
-            QPushButton:hover {
-                background-color: #d0d0d0;
-                border-color: #808080;
-            }
-            QPushButton:pressed {
-                background-color: #c0c0c0;
-            }
-            QPushButton#setWaveBtn {
-                background-color: #0078d4;
-                color: #ffffff;
-                border: 1px solid #005a9e;
-            }
-            QPushButton#setWaveBtn:hover {
-                background-color: #006cc1;
-            }
-            QPushButton#setWaveBtn:pressed {
-                background-color: #005a9e;
-            }
-            QPushButton#setAttenBtn {
-                background-color: #107c10;
-                color: #ffffff;
-                border: 1px solid #0b5c0b;
-            }
-            QPushButton#setAttenBtn:hover {
-                background-color: #0e6b0e;
-            }
-            QPushButton#setAttenBtn:pressed {
-                background-color: #0b5c0b;
-            }
-            QPushButton#closeBtn {
-                background-color: #d83b01;
-                color: #ffffff;
-                border: 1px solid #a52c00;
-            }
-            QPushButton#closeBtn:hover {
-                background-color: #c43400;
-            }
-            QPushButton#closeBtn:pressed {
-                background-color: #a52c00;
-            }
-            QPushButton#resetBtn {
-                background-color: #ffb900;
-                color: #333333;
-                border: 1px solid #cc9400;
-            }
-            QPushButton#resetBtn:hover {
-                background-color: #e6a700;
-            }
-            QPushButton#resetBtn:pressed {
-                background-color: #cc9400;
-            }
-        """)
-        
-        # ===== 左侧：通道标识 =====
+        self.setStyleSheet(self._style_sheet())
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(8, 8, 8, 8)
+        main_layout.setSpacing(6)
+
+        main_layout.addWidget(self._create_header())
+        main_layout.addWidget(self._create_mode_selector())
+        self.output_group = self._create_formula_panel("output")
+        self.input_group = self._create_formula_panel("input")
+        main_layout.addWidget(self.output_group)
+        main_layout.addWidget(self.input_group)
+        main_layout.addWidget(self._create_common_controls())
+
+    def _create_header(self):
+        header = QFrame()
+        header.setObjectName("channelHeader")
+        layout = QHBoxLayout(header)
+        layout.setContentsMargins(10, 6, 10, 6)
+
         self.channel_label = QLabel(f"CH{self.address}")
-        self.channel_label.setFixedSize(54, 38)
-        self.channel_label.setAlignment(Qt.AlignCenter)
-        self.channel_label.setStyleSheet("""
-            QLabel {
-                color: #ffffff;
-                font-family: "SimHei", "黑体";
-                font-size: 16px;
-                font-weight: bold;
-                background-color: #0078d4;
-                border: 1px solid #005a9e;
-                border-radius: 2px;
-            }
-        """)
-        main_layout.addWidget(self.channel_label)
-        
-        # ===== 波长选择区域 =====
-        wave_label = QLabel("波长:")
-        wave_label.setFixedWidth(45)
-        main_layout.addWidget(wave_label)
-        
+        self.channel_label.setObjectName("channelTitle")
+        layout.addWidget(self.channel_label)
+        layout.addStretch()
+
+        self.header_status_label = QLabel("● 正常")
+        self.header_status_label.setObjectName("statusOk")
+        layout.addWidget(self.header_status_label)
+        return header
+
+    def _create_mode_selector(self):
+        group = QGroupBox("通道模式")
+        layout = QHBoxLayout(group)
+        layout.setContentsMargins(12, 8, 12, 8)
+
+        self.output_radio = QRadioButton("输出通道")
+        self.input_radio = QRadioButton("输入通道")
+        self.mode_button_group = QButtonGroup(self)
+        self.mode_button_group.addButton(self.output_radio)
+        self.mode_button_group.addButton(self.input_radio)
+        layout.addWidget(self.output_radio)
+        layout.addWidget(self.input_radio)
+        layout.addStretch()
+        return group
+
+    def _create_formula_panel(self, mode):
+        title = "输出模式参数" if mode == "output" else "输入模式参数"
+        group = QGroupBox(title)
+        grid = QGridLayout(group)
+        grid.setContentsMargins(12, 10, 12, 10)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(8)
+
+        target_edit, target_btn = self._create_value_editor(self.target, -200.0, 100.0)
+        min_edit, min_btn = self._create_value_editor(self.min_att, 0.0, 60.0)
+        target_btn.setObjectName("primaryBtn")
+        min_btn.setObjectName("primaryBtn")
+
+        grid.addWidget(QLabel("目标值(dBm):"), 0, 0)
+        grid.addWidget(target_edit, 0, 1)
+        grid.addWidget(target_btn, 0, 2)
+        grid.addWidget(QLabel("ATT 最小值:"), 1, 0)
+        grid.addWidget(min_edit, 1, 1)
+        grid.addWidget(min_btn, 1, 2)
+
+        value_title = "当前 OPM:" if mode == "output" else "功率计读数(x):"
+        value_label = QLabel("0.00 dBm")
+        value_label.setObjectName("metricLabel")
+        att_label = QLabel("0.00 dB")
+        att_label.setObjectName("metricLabel")
+        status_label = QLabel("○ 已停止")
+        status_label.setObjectName("formulaStopped")
+
+        grid.addWidget(QLabel(value_title), 0, 3)
+        grid.addWidget(value_label, 0, 4)
+        grid.addWidget(QLabel("当前 ATT:"), 1, 3)
+        grid.addWidget(att_label, 1, 4)
+        grid.addWidget(QLabel("公式状态:"), 2, 3)
+        grid.addWidget(status_label, 2, 4)
+
+        start_btn = QPushButton("启动公式")
+        start_btn.setObjectName("startFormulaBtn")
+        stop_btn = QPushButton("停止公式")
+        stop_btn.setObjectName("stopFormulaBtn")
+        alarm_label = QLabel("● 正常")
+        alarm_label.setObjectName("alarmOk")
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addWidget(start_btn)
+        btn_layout.addWidget(stop_btn)
+        btn_layout.addWidget(alarm_label)
+        btn_layout.addStretch()
+        grid.addLayout(btn_layout, 2, 0, 1, 3)
+
+        if mode == "output":
+            self.output_target_input = target_edit
+            self.output_min_att_input = min_edit
+            self.output_target_btn = target_btn
+            self.output_min_att_btn = min_btn
+            self.output_opm_label = value_label
+            self.output_att_label = att_label
+            self.output_formula_status = status_label
+            self.output_start_btn = start_btn
+            self.output_stop_btn = stop_btn
+            self.output_alarm_label = alarm_label
+        else:
+            self.input_target_input = target_edit
+            self.input_min_att_input = min_edit
+            self.input_target_btn = target_btn
+            self.input_min_att_btn = min_btn
+            self.input_power_label = value_label
+            self.input_att_label = att_label
+            self.input_formula_status = status_label
+            self.input_start_btn = start_btn
+            self.input_stop_btn = stop_btn
+            self.input_alarm_label = alarm_label
+
+        return group
+
+    def _create_common_controls(self):
+        group = QGroupBox("通用控制")
+        layout = QHBoxLayout(group)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(8)
+
+        layout.addWidget(QLabel("波长:"))
         self.wave_combo = QComboBox()
-        self.wave_combo.setFixedSize(100, 30)
-        for wl in self.jw8507.waveLength_list:
-            self.wave_combo.addItem(f"{wl} nm", wl)
-        main_layout.addWidget(self.wave_combo)
-        
+        self.wave_combo.setFixedWidth(110)
+        for wavelength in self.jw8507.waveLength_list:
+            self.wave_combo.addItem(f"{wavelength} nm", wavelength)
+        layout.addWidget(self.wave_combo)
+
         self.set_wave_btn = QPushButton("设置")
-        self.set_wave_btn.setObjectName("setWaveBtn")
-        self.set_wave_btn.setFixedSize(56, 30)
-        main_layout.addWidget(self.set_wave_btn)
-        
-        # ===== 分隔线 =====
-        self._add_separator(main_layout)
-        
-        # ===== 衰减值设置区域 =====
-        atten_label = QLabel("衰减:")
-        atten_label.setFixedWidth(45)
-        main_layout.addWidget(atten_label)
-        
+        self.set_wave_btn.setObjectName("primaryBtn")
+        layout.addWidget(self.set_wave_btn)
+
+        self._add_separator(layout)
+
+        layout.addWidget(QLabel("手动衰减:"))
         self.atten_input = QLineEdit()
         self.atten_input.setPlaceholderText("0.00")
-        self.atten_input.setFixedSize(75, 30)
         self.atten_input.setAlignment(Qt.AlignRight)
-        # 设置输入验证器，允许0-60的浮点数
-        validator = QDoubleValidator(0.0, 60.0, 2)
-        validator.setNotation(QDoubleValidator.StandardNotation)
-        self.atten_input.setValidator(validator)
-        main_layout.addWidget(self.atten_input)
-        
-        atten_unit = QLabel("dB")
-        atten_unit.setFixedWidth(28)
-        atten_unit.setStyleSheet("color: #333333; font-family: 'SimHei', '黑体'; font-size: 14px; font-weight: bold;")
-        main_layout.addWidget(atten_unit)
-        
+        self.atten_input.setFixedWidth(80)
+        atten_validator = QDoubleValidator(0.0, 60.0, 2)
+        atten_validator.setNotation(QDoubleValidator.StandardNotation)
+        self.atten_input.setValidator(atten_validator)
+        layout.addWidget(self.atten_input)
+        layout.addWidget(QLabel("dB"))
+
         self.set_atten_btn = QPushButton("设置")
         self.set_atten_btn.setObjectName("setAttenBtn")
-        self.set_atten_btn.setFixedSize(56, 30)
-        main_layout.addWidget(self.set_atten_btn)
-        
-        # ===== 分隔线 =====
-        self._add_separator(main_layout)
-        
-        # ===== 控制按钮区域 =====
+        layout.addWidget(self.set_atten_btn)
+
         self.close_btn = QPushButton("关断")
         self.close_btn.setObjectName("closeBtn")
-        self.close_btn.setFixedSize(56, 30)
-        main_layout.addWidget(self.close_btn)
-        
+        layout.addWidget(self.close_btn)
+
         self.reset_btn = QPushButton("重置")
         self.reset_btn.setObjectName("resetBtn")
-        self.reset_btn.setFixedSize(56, 30)
-        main_layout.addWidget(self.reset_btn)
-        
-        # ===== 分隔线 =====
-        self._add_separator(main_layout)
-        
-        # ===== 弹性空间 =====
-        main_layout.addStretch(1)
-        
-        # ===== 右侧：LCD显示区域 =====
+        layout.addWidget(self.reset_btn)
+        layout.addStretch()
+
         lcd_frame = QFrame()
-        lcd_frame.setFixedSize(160, 46)
-        lcd_frame.setStyleSheet("""
-            QFrame {
-                background-color: #1a1a1a;
-                border: 2px solid #404040;
-                border-radius: 3px;
-            }
-        """)
+        lcd_frame.setObjectName("lcdFrame")
         lcd_layout = QHBoxLayout(lcd_frame)
         lcd_layout.setContentsMargins(8, 4, 8, 4)
-        lcd_layout.setSpacing(4)
-        
         self.lcd_display = QLCDNumber()
         self.lcd_display.setDigitCount(6)
         self.lcd_display.setSegmentStyle(QLCDNumber.Flat)
-        self.lcd_display.setFixedSize(108, 34)
         self.lcd_display.display(0.00)
-        self.lcd_display.setStyleSheet("""
-            QLCDNumber {
-                background-color: transparent;
-                color: #00ff00;
-                border: none;
-            }
-        """)
         lcd_layout.addWidget(self.lcd_display)
-        
         lcd_unit = QLabel("dB")
-        lcd_unit.setFixedWidth(28)
-        lcd_unit.setAlignment(Qt.AlignCenter)
-        lcd_unit.setStyleSheet("""
-            QLabel {
-                color: #00ff00;
-                font-family: "SimHei", "黑体";
-                font-size: 14px;
-                font-weight: bold;
-                background: transparent;
-                border: none;
-            }
-        """)
+        lcd_unit.setObjectName("lcdUnit")
         lcd_layout.addWidget(lcd_unit)
-        
-        main_layout.addWidget(lcd_frame)
-        
+        layout.addWidget(lcd_frame)
+        return group
+
+    def _create_value_editor(self, value, bottom, top):
+        edit = QLineEdit(f"{float(value):.2f}")
+        edit.setAlignment(Qt.AlignRight)
+        edit.setFixedWidth(90)
+        validator = QDoubleValidator(bottom, top, 2)
+        validator.setNotation(QDoubleValidator.StandardNotation)
+        edit.setValidator(validator)
+        button = QPushButton("设置")
+        return edit, button
+
     def _add_separator(self, layout):
-        """添加垂直分隔线"""
         separator = QFrame()
         separator.setFrameShape(QFrame.VLine)
         separator.setFixedWidth(1)
-        separator.setStyleSheet("""
-            QFrame {
-                background-color: #b0b0b0;
-                border: none;
-            }
-        """)
+        separator.setObjectName("separator")
         layout.addWidget(separator)
-        
+
     def _connect_signals(self):
-        """连接信号槽"""
+        self.output_radio.toggled.connect(lambda checked: checked and self.set_mode("output"))
+        self.input_radio.toggled.connect(lambda checked: checked and self.set_mode("input"))
+
+        for button in (self.output_target_btn, self.input_target_btn):
+            button.clicked.connect(self._on_set_target)
+        for button in (self.output_min_att_btn, self.input_min_att_btn):
+            button.clicked.connect(self._on_set_min_att)
+
+        self.output_start_btn.clicked.connect(self.start_formula)
+        self.input_start_btn.clicked.connect(self.start_formula)
+        self.output_stop_btn.clicked.connect(self.stop_formula)
+        self.input_stop_btn.clicked.connect(self.stop_formula)
+
         self.set_wave_btn.clicked.connect(self._on_set_wavelength)
         self.set_atten_btn.clicked.connect(self._on_set_attenuation)
         self.close_btn.clicked.connect(self._on_close_channel)
         self.reset_btn.clicked.connect(self._on_reset_channel)
         self.atten_input.returnPressed.connect(self._on_set_attenuation)
-        
+
     def _setup_refresh_timer(self):
-        """设置刷新定时器"""
         self.refresh_timer = QTimer(self)
         self.refresh_timer.timeout.connect(self.refresh_display)
-        # 启动自动刷新，使用配置的刷新间隔
         self.refresh_timer.start(self.refresh_interval)
-    
+
     def _load_initial_data(self):
-        """
-        加载通道初始数据
-        
-        在通道创建时读取一次实时数据，设置初始值
-        """
         try:
             success, info = self.jw8507.read_RT_info(self.address)
             if success:
-                # 设置衰减值
-                self.current_attenuation = info.get("衰减值", 0.0)
-                self.lcd_display.display(f"{self.current_attenuation:.2f}")
-                
-                # 设置波长下拉框
-                wavelength = info.get("波长信息", None)
-                if wavelength is not None:
-                    # 在下拉框中查找对应的波长并选中
-                    for i in range(self.wave_combo.count()):
-                        if self.wave_combo.itemData(i) == wavelength:
-                            self.wave_combo.setCurrentIndex(i)
-                            break
-                
-                self._emit_log(f"通道 {self.address} 初始化: 波长={wavelength}nm, 衰减={self.current_attenuation:.2f}dB")
-        except Exception as e:
-            self._emit_log(f"通道 {self.address} 读取初始数据失败: {e}")
-        
-    def start_auto_refresh(self, interval_ms: int = 500):
-        """
-        启动自动刷新
-        
-        :param interval_ms: 刷新间隔（毫秒）
-        """
-        self.refresh_timer.start(interval_ms)
-        
-    def stop_auto_refresh(self):
-        """停止自动刷新"""
-        self.refresh_timer.stop()
-        
+                self._sync_rt_info(info)
+                self._emit_log(
+                    f"通道 {self.address} 初始化: 波长={info.get('波长信息')}nm, "
+                    f"衰减={self.current_attenuation:.2f}dB"
+                )
+        except Exception as exc:
+            self._emit_log(f"通道 {self.address} 读取初始数据失败: {exc}")
+
     def refresh_display(self):
-        """
-        刷新LCD显示
-        
-        从设备读取实际的衰减值和波长信息，更新UI显示
-        这样无论是本地设置还是远程控制，都能正确反映设备实际状态
-        """
+        if self.mode == "input" and self.power_bridge is not None:
+            self._update_input_power(self.power_bridge.get_power(self.power_meter_channel))
+
         try:
             success, info = self.jw8507.read_RT_info(self.address)
             if success:
-                # 更新衰减值显示
-                self.current_attenuation = info.get("衰减值", 0.0)
-                self.lcd_display.display(f"{self.current_attenuation:.2f}")
-                
-                # 更新波长下拉框（仅当波长发生变化时）
-                wavelength = info.get("波长信息", None)
-                if wavelength is not None:
-                    current_wavelength = self.wave_combo.currentData()
-                    if current_wavelength != wavelength:
-                        # 在下拉框中查找对应的波长并选中
-                        for i in range(self.wave_combo.count()):
-                            if self.wave_combo.itemData(i) == wavelength:
-                                self.wave_combo.setCurrentIndex(i)
-                                break
-        except Exception as e:
-            # 避免频繁输出错误日志，只在第一次失败时输出
-            if not hasattr(self, '_last_refresh_failed') or not self._last_refresh_failed:
-                self._emit_log(f"刷新通道 {self.address} 失败: {e}")
+                self._sync_wavelength(info.get("波长信息", None))
+                if not self._formula_running():
+                    self._sync_rt_info(info)
+        except Exception as exc:
+            if not self._last_refresh_failed:
+                self._emit_log(f"刷新通道 {self.address} 失败: {exc}")
                 self._last_refresh_failed = True
         else:
             self._last_refresh_failed = False
-            
+
+    def start_auto_refresh(self, interval_ms: int = 500):
+        self.refresh_timer.start(interval_ms)
+
+    def stop_auto_refresh(self):
+        self.refresh_timer.stop()
+
+    def set_mode(self, mode: str, persist: bool = True):
+        if mode not in ("output", "input"):
+            return False
+        changed = self.mode != mode
+        if self.mode != mode:
+            self.stop_formula()
+            self.mode = mode
+            self._emit_log(f"通道 {self.address} 模式切换为 {'输出通道' if mode == 'output' else '输入通道'}")
+        self._apply_mode_to_ui()
+        if changed and persist:
+            self.config_changed.emit(self.address, "mode", self.mode)
+        return True
+
+    def set_target(self, target: float, persist: bool = True):
+        self.target = float(target)
+        self._sync_parameter_inputs()
+        if self.formula_thread and self.formula_thread.isRunning():
+            self.formula_thread.update_target(self.target)
+        self._emit_log(f"通道 {self.address} 目标值设置为 {self.target:.2f} dBm")
+        if persist:
+            self.config_changed.emit(self.address, "target", self.target)
+        return True
+
+    def set_min_att(self, min_att: float, persist: bool = True):
+        self.min_att = max(0.0, float(min_att))
+        self._sync_parameter_inputs()
+        if self.formula_thread and self.formula_thread.isRunning():
+            self.formula_thread.update_min_att(self.min_att)
+        self._emit_log(f"通道 {self.address} ATT 最小值设置为 {self.min_att:.2f} dB")
+        if persist:
+            self.config_changed.emit(self.address, "min_att", self.min_att)
+        return True
+
+    def start_formula(self):
+        if self._formula_running():
+            return True
+        if self.mode == "input" and self.power_bridge is None:
+            self._emit_log(f"通道 {self.address} 输入模式缺少功率计桥接器")
+            return False
+
+        try:
+            thread = AttFormulaThread(
+                channel_address=self.address,
+                jw8507_device=self.jw8507,
+                mode=self.mode,
+                target=self.target,
+                min_att=self.min_att,
+                power_bridge=self.power_bridge,
+                power_meter_channel=self.power_meter_channel,
+                interval_ms=self.formula_interval_ms,
+                parent=self,
+            )
+        except Exception as exc:
+            self._emit_log(f"通道 {self.address} 启动公式失败: {exc}")
+            return False
+
+        thread.att_updated.connect(self._on_att_updated_from_thread)
+        thread.opm_updated.connect(self._update_opm)
+        thread.input_power_updated.connect(self._update_input_power)
+        thread.alarm_triggered.connect(self._on_alarm)
+        thread.alarm_cleared.connect(self._on_alarm_clear)
+        thread.log_message.connect(self._emit_log)
+        thread.running_status.connect(self._update_formula_status)
+        thread.finished.connect(self._on_thread_finished)
+        self.formula_thread = thread
+        thread.start()
+        self._update_formula_status(True)
+        return True
+
+    def stop_formula(self):
+        if self.formula_thread:
+            if self.formula_thread.isRunning():
+                self.formula_thread.stop()
+                self.formula_thread.wait(2000)
+            self.formula_thread = None
+        if self.alarm_active or self._alarm_dialog is not None:
+            self._on_alarm_clear()
+        self._update_formula_status(False)
+        return True
+
+    def get_status(self):
+        return {
+            "CH": self.address,
+            "Mode": self.mode,
+            "Target": self.target,
+            "MinAtt": self.min_att,
+            "Attenuation": self.current_attenuation,
+            "OPM": self.latest_opm,
+            "InputPower": self.latest_input_power,
+            "FormulaRunning": self._formula_running(),
+            "Alarm": self.alarm_active,
+        }
+
+    def _on_set_target(self):
+        edit = self.output_target_input if self.mode == "output" else self.input_target_input
+        try:
+            self.set_target(float(edit.text()))
+        except ValueError:
+            self._emit_log("请输入有效的目标值")
+
+    def _on_set_min_att(self):
+        edit = self.output_min_att_input if self.mode == "output" else self.input_min_att_input
+        try:
+            self.set_min_att(float(edit.text()))
+        except ValueError:
+            self._emit_log("请输入有效的 ATT 最小值")
+
     def _on_set_wavelength(self):
-        """设置波长"""
         wavelength = self.wave_combo.currentData()
         try:
-            success = self.jw8507.set_waveLength(self.address, wavelength)
-            if success:
+            if self.jw8507.set_waveLength(self.address, wavelength):
                 self._emit_log(f"通道 {self.address} 波长设置成功: {wavelength} nm")
             else:
                 self._emit_log(f"通道 {self.address} 波长设置失败")
-        except Exception as e:
-            self._emit_log(f"设置波长异常: {e}")
-            
+        except Exception as exc:
+            self._emit_log(f"设置波长异常: {exc}")
+
     def _on_set_attenuation(self):
-        """设置衰减值"""
         text = self.atten_input.text().strip()
         if not text:
             return
-            
         try:
             attenuation = float(text)
-            
-            # 检查衰减值范围 0-60 dB
-            if attenuation < 0 or attenuation > 60:
-                QMessageBox.warning(
-                    self, 
-                    "范围错误", 
-                    f"衰减值超出范围！\n\n有效范围: 0 ~ 60 dB\n当前输入: {attenuation} dB",
-                    QMessageBox.Ok
-                )
-                self.atten_input.selectAll()
-                self.atten_input.setFocus()
-                return
-            
-            success = self.jw8507.set_attenuation(self.address, attenuation)
-            if success:
-                self._emit_log(f"通道 {self.address} 衰减设置成功: {attenuation} dB")
-                # 不再立即更新LCD显示，而是让定时器自动刷新实际值
-                # 这样可以确保显示的是设备实际的衰减值
-            else:
-                self._emit_log(f"通道 {self.address} 衰减设置失败")
         except ValueError:
             self._emit_log("请输入有效的衰减值")
-        except Exception as e:
-            self._emit_log(f"设置衰减异常: {e}")
-            
-    def _on_close_channel(self):
-        """关断通道"""
+            return
+        if attenuation < 0 or attenuation > 60:
+            QMessageBox.warning(self, "范围错误", "衰减值有效范围: 0 ~ 60 dB", QMessageBox.Ok)
+            return
         try:
-            success = self.jw8507.set_CloseReset(self.address, "Close")
-            if success:
+            if self.jw8507.set_attenuation(self.address, attenuation):
+                self._emit_log(f"通道 {self.address} 衰减设置成功: {attenuation:.2f} dB")
+            else:
+                self._emit_log(f"通道 {self.address} 衰减设置失败")
+        except Exception as exc:
+            self._emit_log(f"设置衰减异常: {exc}")
+
+    def _on_close_channel(self):
+        try:
+            if self.jw8507.set_CloseReset(self.address, "Close"):
                 self._emit_log(f"通道 {self.address} 已关断")
-                # LCD颜色会在下次刷新时根据实际读取的值自动更新
-                # 关断后衰减值通常为最大值（60dB或更大）
             else:
                 self._emit_log(f"通道 {self.address} 关断失败")
-        except Exception as e:
-            self._emit_log(f"关断通道异常: {e}")
-            
+        except Exception as exc:
+            self._emit_log(f"关断通道异常: {exc}")
+
     def _on_reset_channel(self):
-        """重置通道"""
         try:
-            success = self.jw8507.set_CloseReset(self.address, "Reset")
-            if success:
-                self.lcd_display.setStyleSheet("""
-                    QLCDNumber {
-                        background-color: transparent;
-                        color: #00ff00;
-                        border: none;
-                    }
-                """)
+            if self.jw8507.set_CloseReset(self.address, "Reset"):
                 self._emit_log(f"通道 {self.address} 已重置")
-                # 不再立即更新显示值，让定时器自动刷新实际值
             else:
                 self._emit_log(f"通道 {self.address} 重置失败")
-        except Exception as e:
-            self._emit_log(f"重置通道异常: {e}")
-            
+        except Exception as exc:
+            self._emit_log(f"重置通道异常: {exc}")
+
+    def _on_att_updated_from_thread(self, att_value):
+        self.current_attenuation = float(att_value)
+        self._update_att_display()
+
+    def _on_thread_finished(self):
+        self.formula_thread = None
+        self._update_formula_status(False)
+
+    def _on_alarm(self, att_value):
+        self.alarm_active = True
+        message = f"ATT={att_value:.2f} dB 低于最小值 {self.min_att:.2f} dB"
+        self.alarm_signal.emit(self.address, message)
+        self._block_ui_controls(True)
+        self._update_alarm_indicator()
+        self._show_alarm_dialog(att_value)
+
+    def _on_alarm_clear(self):
+        if not self.alarm_active and self._alarm_dialog is None:
+            return
+        self.alarm_active = False
+        self._block_ui_controls(False)
+        self._update_alarm_indicator()
+        self._close_alarm_dialog()
+
+    def _show_alarm_dialog(self, att_value):
+        if self._alarm_dialog is None:
+            self._alarm_dialog = AlarmMessageBox(self)
+            self._alarm_dialog.setWindowTitle("ATT 过低报警")
+            self._alarm_dialog.setIcon(QMessageBox.Warning)
+            self._alarm_dialog.setStandardButtons(QMessageBox.NoButton)
+            self._alarm_dialog.setWindowModality(Qt.ApplicationModal)
+            self._alarm_dialog.setWindowFlags(
+                self._alarm_dialog.windowFlags() & ~Qt.WindowCloseButtonHint
+            )
+        self._alarm_dialog.prevent_close()
+        self._alarm_dialog.setText(
+            f"通道 CH{self.address} ATT 值 ({att_value:.2f} dB) 低于预设最小值 "
+            f"({self.min_att:.2f} dB)！\n\n"
+            "请现场人员手动修改生产环境。\n"
+            "公式检测线程仍在后台运行，恢复正常后将自动关闭此提示。"
+        )
+        self._alarm_dialog.show()
+
+    def _close_alarm_dialog(self):
+        if self._alarm_dialog is not None:
+            self._alarm_dialog.allow_close()
+            self._alarm_dialog.hide()
+            self._alarm_dialog.deleteLater()
+            self._alarm_dialog = None
+
+    def _block_ui_controls(self, blocked):
+        controls = [
+            self.output_radio,
+            self.input_radio,
+            self.output_target_input,
+            self.output_target_btn,
+            self.output_min_att_input,
+            self.output_min_att_btn,
+            self.input_target_input,
+            self.input_target_btn,
+            self.input_min_att_input,
+            self.input_min_att_btn,
+            self.set_wave_btn,
+            self.set_atten_btn,
+            self.close_btn,
+            self.reset_btn,
+            self.atten_input,
+            self.wave_combo,
+            self.output_start_btn,
+            self.input_start_btn,
+        ]
+        for control in controls:
+            control.setEnabled(not blocked)
+        self.output_stop_btn.setEnabled(True)
+        self.input_stop_btn.setEnabled(True)
+
+    def _sync_rt_info(self, info):
+        self.current_attenuation = float(info.get("衰减值", 0.0))
+        self.latest_opm = float(info.get("输出功率值", 0.0))
+        self._sync_wavelength(info.get("波长信息", None))
+        self._update_att_display()
+        self._update_opm(self.latest_opm)
+
+    def _sync_wavelength(self, wavelength):
+        if wavelength is None:
+            if not self._wavelength_missing_logged:
+                self._emit_log(f"通道 {self.address} 波长信息为空，跳过同步")
+                self._wavelength_missing_logged = True
+            return
+        self._wavelength_missing_logged = False
+        if self.wave_combo.currentData() == wavelength:
+            return
+        for index in range(self.wave_combo.count()):
+            if self.wave_combo.itemData(index) == wavelength:
+                self.wave_combo.setCurrentIndex(index)
+                break
+
+    def _sync_parameter_inputs(self):
+        for edit in (self.output_target_input, self.input_target_input):
+            edit.setText(f"{self.target:.2f}")
+        for edit in (self.output_min_att_input, self.input_min_att_input):
+            edit.setText(f"{self.min_att:.2f}")
+
+    def _apply_mode_to_ui(self):
+        self.output_radio.setChecked(self.mode == "output")
+        self.input_radio.setChecked(self.mode == "input")
+        self.output_group.setVisible(self.mode == "output")
+        self.input_group.setVisible(self.mode == "input")
+        self._sync_parameter_inputs()
+        self._update_formula_status(self._formula_running())
+        self._update_alarm_indicator()
+
+    def _update_formula_status(self, running):
+        text = "● 运行中" if running else "○ 已停止"
+        object_name = "formulaRunning" if running else "formulaStopped"
+        for label in (self.output_formula_status, self.input_formula_status):
+            label.setText(text)
+            label.setObjectName(object_name)
+            label.style().unpolish(label)
+            label.style().polish(label)
+        self.output_start_btn.setEnabled(not running and not self.alarm_active)
+        self.input_start_btn.setEnabled(not running and not self.alarm_active)
+        self.output_stop_btn.setEnabled(running or self.alarm_active)
+        self.input_stop_btn.setEnabled(running or self.alarm_active)
+
+    def _update_alarm_indicator(self):
+        text = "● 报警" if self.alarm_active else "● 正常"
+        object_name = "alarmBad" if self.alarm_active else "alarmOk"
+        for label in (self.output_alarm_label, self.input_alarm_label):
+            label.setText(text)
+            label.setObjectName(object_name)
+            label.style().unpolish(label)
+            label.style().polish(label)
+        self.header_status_label.setText(text)
+        self.header_status_label.setObjectName("statusBad" if self.alarm_active else "statusOk")
+        self.header_status_label.style().unpolish(self.header_status_label)
+        self.header_status_label.style().polish(self.header_status_label)
+
+    def _update_att_display(self):
+        self.lcd_display.display(f"{self.current_attenuation:.2f}")
+        self.output_att_label.setText(f"{self.current_attenuation:.2f} dB")
+        self.input_att_label.setText(f"{self.current_attenuation:.2f} dB")
+
+    def _update_opm(self, opm):
+        self.latest_opm = float(opm)
+        self.output_opm_label.setText(f"{self.latest_opm:.2f} dBm")
+
+    def _update_input_power(self, power):
+        self.latest_input_power = float(power)
+        self.input_power_label.setText(f"{self.latest_input_power:.2f} dBm")
+
+    def _formula_running(self):
+        return bool(self.formula_thread and self.formula_thread.isRunning())
+
     def _emit_log(self, message: str):
-        """
-        发送日志信号
-        
-        :param message: 日志消息
-        """
         self.log_signal.emit(message)
-    
+
     def get_current_attenuation(self) -> float:
-        """获取当前衰减值"""
         return self.current_attenuation
-    
+
     def set_channel_name(self, name: str):
-        """
-        设置通道显示名称
-        
-        :param name: 自定义名称
-        """
         self.channel_label.setText(name)
 
-
-# ===== 测试代码 =====
-if __name__ == "__main__":
-    import sys
-    from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QScrollArea
-    from PyQt5 import QtCore
-    import serial
-
-    QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling)
-    
-    app = QApplication(sys.argv)
-    
-    # 创建主窗口
-    window = QMainWindow()
-    window.setWindowTitle("JW8507 通道控制")
-    window.setStyleSheet("""
-        QMainWindow {
-            background-color: #e0e0e0;
-        }
-    """)
-    window.setMinimumSize(720, 300)
-    window.resize(750, 380)
-    
-    # 滚动区域
-    scroll = QScrollArea()
-    scroll.setWidgetResizable(True)
-    scroll.setFrameShape(QFrame.NoFrame)
-    scroll.setStyleSheet("""
-        QScrollArea {
-            background-color: #e0e0e0;
-            border: none;
-        }
-    """)
-    window.setCentralWidget(scroll)
-    
-    # 中央部件
-    central = QWidget()
-    central.setStyleSheet("background-color: #e0e0e0;")
-    scroll.setWidget(central)
-    
-    layout = QVBoxLayout(central)
-    layout.setSpacing(6)
-    layout.setContentsMargins(10, 10, 10, 10)
-    
-    # 创建串口（测试时可能连接失败，仅用于演示）
-    try:
-        ser = serial.Serial("COM8", 115200, timeout=0.1)
-        jw8507 = JW8507(ser)
-        jw8507.connect()
-    except:
-        # 如果无法连接，创建一个模拟对象用于UI测试
-        class MockSerial:
-            is_open = True
-            def open(self): pass
-            def close(self): pass
-            def write(self, data): pass
-            def read(self, length): return b'\x00' * length
-        
-        ser = MockSerial()
-        jw8507 = JW8507(ser)
-    
-    # 添加多个通道控件
-    for i in range(1, 9):
-        channel_widget = ChannelWidget(address=i, jw8507=jw8507)
-        layout.addWidget(channel_widget)
-    
-    layout.addStretch()
-    
-    window.show()
-    sys.exit(app.exec_())
-
+    def _style_sheet(self):
+        return """
+            ChannelWidget {
+                background-color: #f5f7fa;
+                border: 1px solid #c9d1d9;
+                border-radius: 4px;
+            }
+            QGroupBox {
+                color: #24292f;
+                font-weight: bold;
+                border: 1px solid #d0d7de;
+                border-radius: 4px;
+                margin-top: 8px;
+                padding-top: 8px;
+                background: #ffffff;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 4px;
+            }
+            QLabel {
+                color: #24292f;
+                font-family: "Microsoft YaHei", "SimHei";
+                font-size: 13px;
+                background: transparent;
+            }
+            QFrame#channelHeader {
+                background-color: #0969da;
+                border-radius: 3px;
+            }
+            QLabel#channelTitle {
+                color: #ffffff;
+                font-size: 16px;
+                font-weight: bold;
+            }
+            QLabel#statusOk, QLabel#alarmOk {
+                color: #1a7f37;
+                font-weight: bold;
+            }
+            QLabel#statusBad, QLabel#alarmBad {
+                color: #cf222e;
+                font-weight: bold;
+            }
+            QLabel#metricLabel {
+                color: #0969da;
+                font-size: 18px;
+                font-weight: bold;
+            }
+            QLabel#formulaRunning {
+                color: #1a7f37;
+                font-weight: bold;
+            }
+            QLabel#formulaStopped {
+                color: #6e7781;
+                font-weight: bold;
+            }
+            QLineEdit, QComboBox {
+                background-color: #ffffff;
+                color: #24292f;
+                border: 1px solid #8c959f;
+                border-radius: 3px;
+                padding: 4px 6px;
+                font-size: 13px;
+            }
+            QPushButton {
+                background-color: #f6f8fa;
+                color: #24292f;
+                border: 1px solid #8c959f;
+                border-radius: 3px;
+                padding: 5px 12px;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background-color: #eef1f4;
+            }
+            QPushButton:disabled {
+                background-color: #eaeef2;
+                color: #8c959f;
+            }
+            QPushButton#primaryBtn, QPushButton#startFormulaBtn {
+                background-color: #2da44e;
+                border-color: #1a7f37;
+                color: #ffffff;
+            }
+            QPushButton#stopFormulaBtn {
+                background-color: #6e7781;
+                border-color: #57606a;
+                color: #ffffff;
+            }
+            QPushButton#setAttenBtn {
+                background-color: #0969da;
+                border-color: #0550ae;
+                color: #ffffff;
+            }
+            QPushButton#closeBtn {
+                background-color: #cf222e;
+                border-color: #a40e26;
+                color: #ffffff;
+            }
+            QPushButton#resetBtn {
+                background-color: #bf8700;
+                border-color: #9a6700;
+                color: #ffffff;
+            }
+            QFrame#separator {
+                background-color: #d0d7de;
+                border: none;
+            }
+            QFrame#lcdFrame {
+                background-color: #1f2328;
+                border: 1px solid #57606a;
+                border-radius: 3px;
+            }
+            QLCDNumber {
+                background: transparent;
+                color: #3fb950;
+                border: none;
+            }
+            QLabel#lcdUnit {
+                color: #3fb950;
+                font-weight: bold;
+            }
+        """

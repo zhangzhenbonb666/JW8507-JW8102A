@@ -21,6 +21,7 @@ from network.TCPServer import TCPServer
 from ui.ChannelWidget import ChannelWidget
 from utils.config import load_app_config, save_app_config
 from utils.logger import setup_file_logger
+from utils.数据桥接器 import PowerMeterBridge
 
 def read_version() -> str:
     """读取版本信息"""
@@ -35,12 +36,15 @@ class MainWindow(QMainWindow):
     
     # 定义信号用于处理TCP远程连接请求（在主线程中执行）
     tcp_connect_signal = pyqtSignal()
+    tcp_channel_command_signal = pyqtSignal(object)
     
-    def __init__(self, parent=None):
+    def __init__(self, power_meter_instance=None, parent=None):
         super().__init__(parent)
         self.version = read_version()
         self.ser = None
         self.jw8507 = None
+        self.power_meter = power_meter_instance
+        self.power_bridge = PowerMeterBridge.get_instance()
         self.channel_widgets = []
         self.config = self._load_config()
         self.sidebar_expanded = True  # 侧边栏展开状态
@@ -93,6 +97,28 @@ class MainWindow(QMainWindow):
                 return self._set_close_reset(cmd["parameter"]["CH"], cmd["parameter"]["Set"])
             elif opcode == "AdjustAttenuation":
                 return self._adjust_attenuation(cmd["parameter"]["CH"], cmd["parameter"]["Delta"])
+        elif opcode in [
+            "SetChannelMode",
+            "SetTarget",
+            "SetMinAtt",
+            "StartFormula",
+            "StopFormula",
+            "GetChannelStatus",
+        ]:
+            import threading
+
+            self._tcp_result_container = {"result": None}
+            self._tcp_result_event = threading.Event()
+            self.tcp_channel_command_signal.emit(cmd)
+
+            if self._tcp_result_event.wait(timeout=10.0):
+                result = self._tcp_result_container["result"]
+                self._tcp_result_container = None
+                self._tcp_result_event = None
+                return result
+            self._tcp_result_container = None
+            self._tcp_result_event = None
+            return [False, "", "Command execution timeout"]
         elif opcode == "ConnectDevice":
             # 连接设备需要在主线程中执行（会创建GUI组件）
             # 使用信号-槽机制和事件来实现线程间同步
@@ -118,6 +144,61 @@ class MainWindow(QMainWindow):
                 self._tcp_result_event = None
                 return [False, "", "Command execution timeout"]
         
+        return [False, "", "Unknown command"]
+
+    def _get_channel_widget(self, channel_num: int):
+        if channel_num < 1 or channel_num > len(self.channel_widgets):
+            return None
+        return self.channel_widgets[channel_num - 1]
+
+    def _handle_channel_tcp_command(self, cmd: dict):
+        try:
+            result = self._execute_channel_tcp_command(cmd)
+        except Exception as exc:
+            result = [False, "", f"Command execution error: {exc}"]
+
+        if self._tcp_result_container is not None:
+            self._tcp_result_container["result"] = result
+        if self._tcp_result_event is not None:
+            self._tcp_result_event.set()
+
+    def _execute_channel_tcp_command(self, cmd: dict):
+        opcode = cmd.get("opcode", "")
+        parameter = cmd.get("parameter", {})
+        channel_num = int(parameter.get("CH", 0))
+        widget = self._get_channel_widget(channel_num)
+        if widget is None:
+            return [False, "", "Channel not available"]
+
+        if opcode == "SetChannelMode":
+            mode = str(parameter.get("Mode", "")).lower()
+            if mode not in ("input", "output"):
+                return [False, "", "Invalid channel mode"]
+            widget.set_mode(mode, persist=False)
+            self._save_channel_config(channel_num, "mode", mode)
+            return [True, "", "Channel mode set successfully"]
+
+        if opcode == "SetTarget":
+            target = float(parameter["Target"])
+            widget.set_target(target, persist=False)
+            self._save_channel_config(channel_num, "target", target)
+            return [True, "", "Target set successfully"]
+
+        if opcode == "SetMinAtt":
+            min_att = float(parameter["MinAtt"])
+            widget.set_min_att(min_att, persist=False)
+            self._save_channel_config(channel_num, "min_att", min_att)
+            return [True, "", "Min ATT set successfully"]
+
+        if opcode == "StartFormula":
+            return [widget.start_formula(), "", "Formula start requested"]
+
+        if opcode == "StopFormula":
+            return [widget.stop_formula(), "", "Formula stop requested"]
+
+        if opcode == "GetChannelStatus":
+            return [True, widget.get_status(), ""]
+
         return [False, "", "Unknown command"]
 
     def _connect_device(self) -> tuple[bool, str, str]:
@@ -603,6 +684,7 @@ class MainWindow(QMainWindow):
         self.read_wavelength_btn.clicked.connect(self._read_wavelength)
         # 连接TCP远程连接信号（用于在主线程中执行GUI操作）
         self.tcp_connect_signal.connect(self._handle_tcp_connect_in_main_thread)
+        self.tcp_channel_command_signal.connect(self._handle_channel_tcp_command)
     
     def _toggle_sidebar(self):
         """切换侧边栏展开/收起状态"""
@@ -743,6 +825,7 @@ class MainWindow(QMainWindow):
     def _disconnect(self):
         """断开连接"""
         self.connected = False
+        self._remove_channel_widgets()
         if self.jw8507:
             self.jw8507.default_display()
             self.jw8507.disconnect()
@@ -752,9 +835,6 @@ class MainWindow(QMainWindow):
             self.ser = None
         
         self.jw8507 = None
-        
-        # 移除通道界面
-        self._remove_channel_widgets()
         
         # 更新UI状态
         self.connect_btn.setText("连接")
@@ -777,6 +857,7 @@ class MainWindow(QMainWindow):
             self.ser = None
         
         self.jw8507 = None
+        self._remove_channel_widgets()
         
         # 更新UI状态
         self.connect_btn.setText("连接")
@@ -795,22 +876,57 @@ class MainWindow(QMainWindow):
         # 获取配置的通道数量和刷新间隔
         channel_count = self.config.get("channel_count", 8)
         refresh_interval = self.config.get("refresh_interval_ms", 500)
+        channel_roles = self.config.get("channel_roles", {})
+        channel_targets = self.config.get("channel_targets", {})
+        channel_min_att = self.config.get("channel_min_att", {})
+        formula_interval = self.config.get("formula_interval_ms", 1000)
         
         # 添加通道控件
         for i in range(1, channel_count + 1):
-            channel_widget = ChannelWidget(address=i, jw8507=self.jw8507, refresh_interval=refresh_interval)
+            channel_key = str(i)
+            channel_widget = ChannelWidget(
+                address=i,
+                jw8507=self.jw8507,
+                refresh_interval=refresh_interval,
+                power_bridge=self.power_bridge,
+                power_meter_channel=i - 1,
+                initial_mode=channel_roles.get(channel_key, "output"),
+                target=channel_targets.get(channel_key, -25.0),
+                min_att=channel_min_att.get(channel_key, 0.0),
+                formula_interval_ms=formula_interval,
+                parent=self,
+            )
             # 连接通道日志信号到主界面日志
             channel_widget.log_signal.connect(self._log)
+            channel_widget.alarm_signal.connect(self._handle_channel_alarm)
+            channel_widget.config_changed.connect(self._save_channel_config)
             self.channel_widgets.append(channel_widget)
             # 在 stretch 之前插入
             self.channel_layout.insertWidget(self.channel_layout.count() - 1, channel_widget)
         
         self._log(f"已添加 {channel_count} 个通道控制界面（刷新间隔: {refresh_interval}ms）")
+
+    def _handle_channel_alarm(self, channel_num, alarm_msg):
+        self._log(f"[报警] CH{channel_num}: {alarm_msg}")
+
+    def _save_channel_config(self, channel_num: int, field: str, value):
+        config_key_map = {
+            "mode": "channel_roles",
+            "target": "channel_targets",
+            "min_att": "channel_min_att",
+        }
+        config_key = config_key_map.get(field)
+        if config_key is None:
+            return
+
+        self.config.setdefault(config_key, {})[str(channel_num)] = value
+        self.config = save_app_config(self.config)
     
     def _remove_channel_widgets(self):
         """移除所有通道控件"""
         for widget in self.channel_widgets:
             widget.stop_auto_refresh()
+            widget.stop_formula()
             widget.setParent(None)
             widget.deleteLater()
         
