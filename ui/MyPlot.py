@@ -31,7 +31,7 @@ import os
 
 # pyqtgraph全局配置：白底黑线
 pg.setConfigOption('background', 'w')
-pg.setConfigOption('foreground', 'k')
+pg.setConfigOption('foreground', '#24292f')
 
 
 class MyPlot(pg.GraphicsLayoutWidget):
@@ -64,6 +64,7 @@ class MyPlot(pg.GraphicsLayoutWidget):
         """
         super(MyPlot, self).__init__()
         self.dataDict = dataDict
+        self.setBackground('#ffffff')
 
         # self.dataLen = dataLen
         for k, v in dataDict.items():
@@ -74,10 +75,16 @@ class MyPlot(pg.GraphicsLayoutWidget):
                 self.dataDict[k] = v
 
         self.plot1 = self.addPlot()
+        self.plot1.showGrid(x=True, y=True, alpha=0.22)
+        self.plot1.getAxis('bottom').setPen(pg.mkPen('#8c959f'))
+        self.plot1.getAxis('left').setPen(pg.mkPen('#8c959f'))
+        self.plot1.getAxis('bottom').setTextPen(pg.mkPen('#57606a'))
+        self.plot1.getAxis('left').setTextPen(pg.mkPen('#57606a'))
+        self.plot1.setMenuEnabled(False)
         key = list(self.dataDict.keys())[self.NowPlotNo]
-        self.plot1.setTitle(key, **{"font-family": "微软雅黑", 'font-size': '12pt'})
+        self.plot1.setTitle(key, color='#24292f', **{"font-family": "微软雅黑", 'font-size': '12pt'})
         self.update_signal.connect(self.updateData)
-        self.curve = self.plot1.plot(self.dataDict[key], pen=pg.mkPen({'color': (0, 0, 255), 'width': 4}))
+        self.curve = self.plot1.plot(self.dataDict[key], pen=pg.mkPen({'color': '#0969da', 'width': 3}))
 
         pass
 
@@ -87,7 +94,7 @@ class MyPlot(pg.GraphicsLayoutWidget):
     def mouseDoubleClickEvent(self, ev):
         self.NowPlotNo = (self.NowPlotNo + 1) % len(self.dataDict)
         key = list(self.dataDict.keys())[self.NowPlotNo]
-        self.plot1.setTitle(key, **{"font-family": "微软雅黑", 'font-size': '20pt'})
+        self.plot1.setTitle(key, color='#24292f', **{"font-family": "微软雅黑", 'font-size': '12pt'})
 
         data1 = self.dataDict[key]
         self.curve.setData(data1)

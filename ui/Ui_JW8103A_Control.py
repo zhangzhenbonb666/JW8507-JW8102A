@@ -26,171 +26,631 @@ class ClickableLabel(QLabel):
 
 
 class Ui_MainWindow(object):
+    def _toggle_sidebar(self):
+        if not hasattr(self, "leftPanel"):
+            return
+        width = getattr(self, "_sidebar_width", 280)
+        expanded = getattr(self, "_sidebar_expanded", True)
+        self._sidebar_expanded = not expanded
+
+        self.sidebarAnimation = QtCore.QPropertyAnimation(self.leftPanel, b"maximumWidth")
+        self.sidebarAnimation.setDuration(200)
+        self.sidebarAnimation.setEasingCurve(QtCore.QEasingCurve.InOutQuad)
+
+        if expanded:
+            self.leftPanel.setMinimumWidth(0)
+            self.sidebarAnimation.setStartValue(width)
+            self.sidebarAnimation.setEndValue(0)
+            self.toggleSidebarBtn.setText("▶")
+            self.leftContainer.setFixedWidth(self.toggleSidebarBtn.width())
+            self.sidebarAnimation.finished.connect(self.leftPanel.hide)
+        else:
+            self.leftPanel.show()
+            self.leftPanel.setMinimumWidth(0)
+            self.leftContainer.setFixedWidth(width + self.toggleSidebarBtn.width())
+            self.sidebarAnimation.setStartValue(0)
+            self.sidebarAnimation.setEndValue(width)
+            self.toggleSidebarBtn.setText("◀")
+
+            def lock_expanded_width():
+                self.leftPanel.setMinimumWidth(width)
+                self.leftPanel.setMaximumWidth(width)
+                self.leftContainer.setFixedWidth(width + self.toggleSidebarBtn.width())
+
+            self.sidebarAnimation.finished.connect(lock_expanded_width)
+
+        self.sidebarAnimation.start()
+
+    def _create_channel_card(self, channel_no, parent):
+        card = QtWidgets.QFrame(parent)
+        card.setProperty("channelCard", "true")
+        card_layout = QtWidgets.QVBoxLayout(card)
+        card_layout.setContentsMargins(8, 8, 8, 8)
+        card_layout.setSpacing(8)
+
+        header = QtWidgets.QFrame(card)
+        header.setObjectName("channelHeader")
+        header_layout = QtWidgets.QHBoxLayout(header)
+        header_layout.setContentsMargins(10, 6, 10, 6)
+
+        title = QtWidgets.QLabel(f"CH{channel_no}  通道{channel_no}", header)
+        title.setObjectName("channelTitle")
+        header_layout.addWidget(title)
+        header_layout.addStretch()
+
+        status = QtWidgets.QLabel("● 正常", header)
+        status.setObjectName("statusOk")
+        header_layout.addWidget(status)
+
+        body_layout = QtWidgets.QGridLayout()
+        body_layout.setContentsMargins(2, 2, 2, 2)
+        body_layout.setHorizontalSpacing(8)
+        body_layout.setVerticalSpacing(8)
+
+        card_layout.addWidget(header)
+        card_layout.addLayout(body_layout)
+        return card, body_layout
+
+    def _set_button_roles(self):
+        for button in (
+            self.openPort,
+            self.TCPconnect,
+            self.Connect,
+        ):
+            button.setProperty("btnRole", "primary")
+
+        for button in (
+            self.closePort,
+            self.TCPdisconnect,
+            self.Disconnect,
+            self.stopRecordBtn,
+        ):
+            button.setProperty("btnRole", "danger")
+
+        for button in (
+            self.ComCheck,
+            self.scanServer,
+            self.RestartHost,
+            self.startRecordBtn,
+        ):
+            button.setProperty("btnRole", "info")
+
+        self.Clean.setProperty("btnRole", "warning")
+
+        for button in (
+            self.setCH1wave,
+            self.setCH2wave,
+            self.setCH3wave,
+            self.setCH4wave,
+            self.saveCH1Plot,
+            self.saveCH2Plot,
+            self.saveCH3Plot,
+            self.saveCH4Plot,
+            self.saveAllPlots,
+        ):
+            button.setProperty("btnRole", "secondary")
+
+    def _configure_lcds(self):
+        palette = QtGui.QPalette()
+        palette.setColor(QtGui.QPalette.Window, QtGui.QColor("#1f2328"))
+        palette.setColor(QtGui.QPalette.Light, QtGui.QColor("#3fb950"))
+        palette.setColor(QtGui.QPalette.Dark, QtGui.QColor("#3fb950"))
+        palette.setColor(QtGui.QPalette.WindowText, QtGui.QColor("#3fb950"))
+        palette.setColor(QtGui.QPalette.Text, QtGui.QColor("#3fb950"))
+        for lcd in (
+            self.CH1_Value, self.CH1_max, self.CH1_min,
+            self.CH2_Value, self.CH2_max, self.CH2_min,
+            self.CH3_Value, self.CH3_max, self.CH3_min,
+            self.CH4_Value, self.CH4_max, self.CH4_min,
+        ):
+            lcd.setAutoFillBackground(True)
+            lcd.setPalette(palette)
+            lcd.setMinimumWidth(80)
+            lcd.setMinimumHeight(42)
+
+    def _configure_fixed_control_sizes(self):
+        for combo in (self.CH1Twave, self.CH2Twave, self.CH3Twave, self.CH4Twave):
+            combo.setMinimumWidth(90)
+            combo.setMaximumWidth(110)
+
+        for button in (
+            self.setCH1wave, self.setCH2wave, self.setCH3wave, self.setCH4wave,
+        ):
+            button.setMinimumWidth(54)
+            button.setMaximumWidth(64)
+
+        for button in (
+            self.saveCH1Plot, self.saveCH2Plot, self.saveCH3Plot, self.saveCH4Plot,
+        ):
+            button.setMinimumWidth(78)
+            button.setMaximumWidth(90)
+
+        for button in (
+            self.Connect, self.startRecordBtn, self.stopRecordBtn,
+            self.Disconnect, self.Clean, self.saveAllPlots,
+        ):
+            button.setMinimumWidth(104)
+
+    def _configure_metric_labels(self):
+        for label in (
+            self.CH1_currentLabel, self.CH1_2, self.CH1_3,
+            self.CH2_currentLabel, self.CH2_2, self.CH2_3,
+            self.CH3_currentLabel, self.CH3_2, self.CH3_3,
+            self.CH4_currentLabel, self.CH4_2, self.CH4_3,
+        ):
+            label.setProperty("metricCaption", "true")
+            label.setAlignment(QtCore.Qt.AlignCenter)
+
+    def _apply_unified_style(self, MainWindow):
+        self._set_button_roles()
+        self._configure_lcds()
+        self._configure_fixed_control_sizes()
+        self._configure_metric_labels()
+        self._sidebar_expanded = True
+        self._sidebar_width = 280
+        self.leftContainer.setFixedWidth(self._sidebar_width + self.toggleSidebarBtn.width())
+        self.toggleSidebarBtn.clicked.connect(self._toggle_sidebar)
+        MainWindow.setStyleSheet("""
+            QMainWindow {
+                background-color: #f0f2f5;
+            }
+            QWidget {
+                font-family: "Microsoft YaHei", "微软雅黑", "SimHei";
+                font-size: 13px;
+            }
+            QWidget#centralwidget {
+                background-color: #f0f2f5;
+            }
+            QLabel {
+                color: #333333;
+                background: transparent;
+            }
+            QLabel#label_7 {
+                color: #24292f;
+                font-size: 28px;
+                font-weight: bold;
+            }
+            QLabel#label_3 {
+                color: #333333;
+                font-size: 18px;
+                font-weight: bold;
+                padding: 6px;
+            }
+            QLabel#version {
+                color: #0078d4;
+                font-size: 12px;
+                text-decoration: underline;
+            }
+            QTabWidget::pane {
+                background-color: #ffffff;
+                border: 1px solid #d0d0d0;
+                border-radius: 6px;
+            }
+            QTabBar::tab {
+                background-color: #e8e8e8;
+                color: #333333;
+                padding: 8px 16px;
+                border: 1px solid #d0d0d0;
+                border-bottom: none;
+                border-radius: 4px 4px 0 0;
+                font-size: 13px;
+            }
+            QTabBar::tab:selected {
+                background-color: #ffffff;
+                color: #0078d4;
+                font-weight: bold;
+            }
+            QWidget#leftContainer {
+                background: transparent;
+            }
+            QFrame#leftPanel {
+                background-color: #ffffff;
+                border-radius: 6px;
+            }
+            QGroupBox {
+                color: #333333;
+                font-size: 14px;
+                font-weight: bold;
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+                margin-top: 10px;
+                padding-top: 10px;
+                background-color: #ffffff;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+            QLineEdit, QComboBox {
+                background-color: #ffffff;
+                color: #333333;
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-size: 13px;
+                min-height: 22px;
+            }
+            QLineEdit:hover, QLineEdit:focus,
+            QComboBox:hover, QComboBox:focus {
+                border-color: #0078d4;
+            }
+            QLineEdit:read-only {
+                background-color: #f6f8fa;
+                color: #57606a;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #ffffff;
+                color: #333333;
+                selection-background-color: #0078d4;
+                selection-color: #ffffff;
+                border: 1px solid #e0e0e0;
+                outline: none;
+            }
+            QTextBrowser, QTextEdit {
+                background-color: #fafafa;
+                color: #333333;
+                border: 1px solid #d0d0d0;
+                border-radius: 3px;
+                font-family: "Consolas", "Microsoft YaHei", "微软雅黑";
+                font-size: 13px;
+                padding: 6px;
+            }
+            QPushButton {
+                border: none;
+                border-radius: 4px;
+                padding: 8px 14px;
+                font-size: 13px;
+                font-weight: bold;
+                color: #ffffff;
+                min-height: 18px;
+            }
+            QPushButton:disabled {
+                background-color: #e0e0e0;
+                color: #999999;
+            }
+            QPushButton[btnRole="primary"] {
+                background-color: #28a745;
+            }
+            QPushButton[btnRole="primary"]:hover {
+                background-color: #218838;
+            }
+            QPushButton[btnRole="danger"] {
+                background-color: #dc3545;
+            }
+            QPushButton[btnRole="danger"]:hover {
+                background-color: #c82333;
+            }
+            QPushButton[btnRole="info"] {
+                background-color: #17a2b8;
+            }
+            QPushButton[btnRole="info"]:hover {
+                background-color: #138496;
+            }
+            QPushButton[btnRole="warning"] {
+                background-color: #bf8700;
+            }
+            QPushButton[btnRole="warning"]:hover {
+                background-color: #9a6700;
+            }
+            QPushButton[btnRole="secondary"] {
+                background-color: #6f42c1;
+            }
+            QPushButton[btnRole="secondary"]:hover {
+                background-color: #5e35b1;
+            }
+            QPushButton[btnRole="primary"]:disabled,
+            QPushButton[btnRole="danger"]:disabled,
+            QPushButton[btnRole="info"]:disabled,
+            QPushButton[btnRole="warning"]:disabled,
+            QPushButton[btnRole="secondary"]:disabled {
+                background-color: #e0e0e0;
+                color: #999999;
+            }
+            QPushButton#toggleSidebarBtn {
+                background-color: #e0e0e0;
+                color: #666666;
+                border: none;
+                border-radius: 0 4px 4px 0;
+                padding: 0;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QPushButton#toggleSidebarBtn:hover {
+                background-color: #d0d0d0;
+                color: #333333;
+            }
+            QLCDNumber {
+                background-color: #1f2328;
+                color: #3fb950;
+                border: 1px solid #57606a;
+                border-radius: 3px;
+                padding: 2px;
+            }
+            QLabel[metricCaption="true"] {
+                color: #0969da;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QFrame[channelCard="true"] {
+                background-color: #f5f7fa;
+                border: 1px solid #c9d1d9;
+                border-radius: 4px;
+            }
+            QFrame#channelHeader {
+                background-color: #0969da;
+                border-radius: 3px;
+            }
+            QLabel#channelTitle {
+                color: #ffffff;
+                font-size: 16px;
+                font-weight: bold;
+            }
+            QLabel#statusOk {
+                color: #ffffff;
+                font-weight: bold;
+            }
+            QFrame#frame, QFrame#frame_3, QFrame#frame_4, QFrame#frame_5 {
+                background-color: #ffffff;
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+            }
+            QFrame#rightPanel {
+                background-color: #ffffff;
+                border-radius: 6px;
+            }
+            QFrame#bottomButtonBar {
+                background-color: #ffffff;
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+            }
+            QScrollArea#channelScrollArea {
+                background-color: #f5f5f5;
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+            }
+            QWidget#channelScrollContent {
+                background-color: #f5f5f5;
+            }
+            QFrame#line, QFrame#line_2, QFrame#line_3, QFrame#line_4,
+            QFrame#line_5, QFrame#line_6, QFrame#line_7, QFrame#line_8 {
+                color: #d0d0d0;
+            }
+            QMessageBox {
+                background-color: #ffffff;
+            }
+            QMessageBox QLabel {
+                color: #333333;
+                font-size: 13px;
+            }
+            QScrollBar:vertical {
+                background-color: #f0f0f0;
+                width: 12px;
+                margin: 0;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #c0c0c0;
+                border-radius: 4px;
+                min-height: 30px;
+                margin: 2px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #a0a0a0;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0;
+            }
+            QScrollBar:horizontal {
+                background-color: #f0f0f0;
+                height: 10px;
+                margin: 0;
+            }
+            QScrollBar::handle:horizontal {
+                background-color: #c0c0c0;
+                border-radius: 4px;
+                min-width: 30px;
+                margin: 2px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background-color: #a0a0a0;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0;
+            }
+        """)
+
     def setupUi(self, MainWindow):
         MainWindow.setObjectName("MainWindow")
         MainWindow.resize(1200, 800)
         self.centralwidget = QtWidgets.QWidget(MainWindow)
         self.centralwidget.setObjectName("centralwidget")
         self.gridLayout = QtWidgets.QGridLayout(self.centralwidget)
+        self.gridLayout.setContentsMargins(10, 10, 10, 10)
+        self.gridLayout.setHorizontalSpacing(10)
+        self.gridLayout.setVerticalSpacing(8)
         self.gridLayout.setObjectName("gridLayout")
         self.verticalLayout_3 = QtWidgets.QVBoxLayout()
+        self.verticalLayout_3.setContentsMargins(0, 0, 0, 0)
+        self.verticalLayout_3.setSpacing(8)
         self.verticalLayout_3.setObjectName("verticalLayout_3")
         self.label_3 = QtWidgets.QLabel(self.centralwidget)
         self.label_3.setMinimumSize(QtCore.QSize(0, 0))
-        self.label_3.setMaximumSize(QtCore.QSize(200, 16777215))
+        self.label_3.setMaximumSize(QtCore.QSize(280, 16777215))
         font = QtGui.QFont()
         font.setPointSize(20)
         self.label_3.setFont(font)
         self.label_3.setAlignment(QtCore.Qt.AlignCenter)
         self.label_3.setObjectName("label_3")
         self.verticalLayout_3.addWidget(self.label_3)
-        self.tabWidget = QtWidgets.QTabWidget(self.centralwidget)
-        self.tabWidget.setMinimumSize(QtCore.QSize(0, 0))
-        self.tabWidget.setMaximumSize(QtCore.QSize(200, 16777215))
-        self.tabWidget.setObjectName("tabWidget")
-        self.tab = QtWidgets.QWidget()
-        self.tab.setObjectName("tab")
-        self.verticalLayout_2 = QtWidgets.QVBoxLayout(self.tab)
+        self.leftContainer = QtWidgets.QWidget(self.centralwidget)
+        self.leftContainer.setObjectName("leftContainer")
+        self.leftContainer.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Expanding)
+        self.leftContainerLayout = QtWidgets.QHBoxLayout(self.leftContainer)
+        self.leftContainerLayout.setContentsMargins(0, 0, 0, 0)
+        self.leftContainerLayout.setSpacing(0)
+        self.leftPanel = QtWidgets.QFrame(self.leftContainer)
+        self.leftPanel.setObjectName("leftPanel")
+        self.leftPanel.setFixedWidth(280)
+        self.leftPanelLayout = QtWidgets.QVBoxLayout(self.leftPanel)
+        self.leftPanelLayout.setContentsMargins(12, 12, 12, 12)
+        self.leftPanelLayout.setSpacing(12)
+        self.leftPanelLayout.addLayout(self.verticalLayout_3)
+
+        self.serialGroup = QtWidgets.QGroupBox(self.leftPanel)
+        self.serialGroup.setObjectName("serialGroup")
+        self.verticalLayout_2 = QtWidgets.QVBoxLayout(self.serialGroup)
         self.verticalLayout_2.setObjectName("verticalLayout_2")
-        self.label = QtWidgets.QLabel(self.tab)
-        self.label.setMaximumSize(QtCore.QSize(200, 200))
-        font = QtGui.QFont()
-        font.setPointSize(20)
-        self.label.setFont(font)
-        self.label.setLayoutDirection(QtCore.Qt.LeftToRight)
-        self.label.setAlignment(QtCore.Qt.AlignCenter)
-        self.label.setObjectName("label")
-        self.verticalLayout_2.addWidget(self.label)
         self.horizontalLayout_2 = QtWidgets.QHBoxLayout()
         self.horizontalLayout_2.setObjectName("horizontalLayout_2")
-        self.label_2 = QtWidgets.QLabel(self.tab)
-        self.label_2.setMaximumSize(QtCore.QSize(100, 16777215))
+        self.label_2 = QtWidgets.QLabel(self.serialGroup)
         self.label_2.setObjectName("label_2")
         self.horizontalLayout_2.addWidget(self.label_2)
-        self.Com = QtWidgets.QComboBox(self.tab)
-        self.Com.setMaximumSize(QtCore.QSize(100, 16777215))
+        self.Com = QtWidgets.QComboBox(self.serialGroup)
         self.Com.setObjectName("Com")
-        self.horizontalLayout_2.addWidget(self.Com)
+        self.horizontalLayout_2.addWidget(self.Com, 1)
         self.verticalLayout_2.addLayout(self.horizontalLayout_2)
-        self.ComName = QtWidgets.QLabel(self.tab)
-        self.ComName.setMaximumSize(QtCore.QSize(200, 16777215))
+        self.ComName = QtWidgets.QLabel(self.serialGroup)
         self.ComName.setText("")
         self.ComName.setObjectName("ComName")
         self.verticalLayout_2.addWidget(self.ComName)
-        self.ComCheck = QtWidgets.QPushButton(self.tab)
-        self.ComCheck.setMaximumSize(QtCore.QSize(200, 200))
+        self.ComCheck = QtWidgets.QPushButton(self.serialGroup)
         self.ComCheck.setObjectName("ComCheck")
         self.verticalLayout_2.addWidget(self.ComCheck)
         self.horizontalLayout_10 = QtWidgets.QHBoxLayout()
         self.horizontalLayout_10.setObjectName("horizontalLayout_10")
-        self.label_8 = QtWidgets.QLabel(self.tab)
+        self.label_8 = QtWidgets.QLabel(self.serialGroup)
         self.label_8.setObjectName("label_8")
         self.horizontalLayout_10.addWidget(self.label_8)
-        self.host_ip = QtWidgets.QLineEdit(self.tab)
+        self.host_ip = QtWidgets.QLineEdit(self.serialGroup)
         self.host_ip.setReadOnly(True)
         self.host_ip.setObjectName("host_ip")
-        self.horizontalLayout_10.addWidget(self.host_ip)
+        self.horizontalLayout_10.addWidget(self.host_ip, 1)
         self.verticalLayout_2.addLayout(self.horizontalLayout_10)
         self.horizontalLayout_11 = QtWidgets.QHBoxLayout()
         self.horizontalLayout_11.setObjectName("horizontalLayout_11")
-        self.label_9 = QtWidgets.QLabel(self.tab)
+        self.label_9 = QtWidgets.QLabel(self.serialGroup)
         self.label_9.setObjectName("label_9")
         self.horizontalLayout_11.addWidget(self.label_9)
-        self.host_port = QtWidgets.QLineEdit(self.tab)
+        self.host_port = QtWidgets.QLineEdit(self.serialGroup)
         self.host_port.setObjectName("host_port")
-        self.horizontalLayout_11.addWidget(self.host_port)
+        self.horizontalLayout_11.addWidget(self.host_port, 1)
         self.verticalLayout_2.addLayout(self.horizontalLayout_11)
-        self.RestartHost = QtWidgets.QPushButton(self.tab)
+        self.RestartHost = QtWidgets.QPushButton(self.serialGroup)
         self.RestartHost.setObjectName("RestartHost")
         self.verticalLayout_2.addWidget(self.RestartHost)
-        self.portInfo = QtWidgets.QTextBrowser(self.tab)
-        self.portInfo.setMaximumSize(QtCore.QSize(200, 16777215))
-        self.portInfo.setObjectName("portInfo")
-        self.verticalLayout_2.addWidget(self.portInfo)
-        spacerItem = QtWidgets.QSpacerItem(20, 40, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Expanding)
-        self.verticalLayout_2.addItem(spacerItem)
-        self.openPort = QtWidgets.QPushButton(self.tab)
-        self.openPort.setMaximumSize(QtCore.QSize(200, 16777215))
+        self.openPort = QtWidgets.QPushButton(self.serialGroup)
         self.openPort.setObjectName("openPort")
         self.verticalLayout_2.addWidget(self.openPort)
-        self.closePort = QtWidgets.QPushButton(self.tab)
-        self.closePort.setMaximumSize(QtCore.QSize(200, 16777215))
+        self.closePort = QtWidgets.QPushButton(self.serialGroup)
         self.closePort.setObjectName("closePort")
         self.verticalLayout_2.addWidget(self.closePort)
-        self.tabWidget.addTab(self.tab, "")
-        self.tab_2 = QtWidgets.QWidget()
-        self.tab_2.setObjectName("tab_2")
-        self.verticalLayout_4 = QtWidgets.QVBoxLayout(self.tab_2)
+        self.leftPanelLayout.addWidget(self.serialGroup)
+
+        self.tcpGroup = QtWidgets.QGroupBox(self.leftPanel)
+        self.tcpGroup.setObjectName("tcpGroup")
+        self.verticalLayout_4 = QtWidgets.QVBoxLayout(self.tcpGroup)
         self.verticalLayout_4.setObjectName("verticalLayout_4")
-        self.label_6 = QtWidgets.QLabel(self.tab_2)
-        font = QtGui.QFont()
-        font.setPointSize(20)
-        self.label_6.setFont(font)
-        self.label_6.setAlignment(QtCore.Qt.AlignCenter)
-        self.label_6.setObjectName("label_6")
-        self.verticalLayout_4.addWidget(self.label_6)
         self.horizontalLayout_7 = QtWidgets.QHBoxLayout()
         self.horizontalLayout_7.setObjectName("horizontalLayout_7")
-        self.label_4 = QtWidgets.QLabel(self.tab_2)
+        self.label_4 = QtWidgets.QLabel(self.tcpGroup)
         self.label_4.setObjectName("label_4")
         self.horizontalLayout_7.addWidget(self.label_4)
-        self.IPaddress = QtWidgets.QLineEdit(self.tab_2)
+        self.IPaddress = QtWidgets.QLineEdit(self.tcpGroup)
         self.IPaddress.setObjectName("IPaddress")
-        self.horizontalLayout_7.addWidget(self.IPaddress)
+        self.horizontalLayout_7.addWidget(self.IPaddress, 1)
         self.verticalLayout_4.addLayout(self.horizontalLayout_7)
-        self.line_6 = QtWidgets.QFrame(self.tab_2)
+        self.line_6 = QtWidgets.QFrame(self.tcpGroup)
         self.line_6.setFrameShape(QtWidgets.QFrame.HLine)
         self.line_6.setFrameShadow(QtWidgets.QFrame.Sunken)
         self.line_6.setObjectName("line_6")
-        self.verticalLayout_4.addWidget(self.line_6)
+        self.line_6.setVisible(False)
         self.horizontalLayout_8 = QtWidgets.QHBoxLayout()
         self.horizontalLayout_8.setObjectName("horizontalLayout_8")
-        self.label_5 = QtWidgets.QLabel(self.tab_2)
+        self.label_5 = QtWidgets.QLabel(self.tcpGroup)
         self.label_5.setObjectName("label_5")
         self.horizontalLayout_8.addWidget(self.label_5)
-        self.IPport = QtWidgets.QLineEdit(self.tab_2)
+        self.IPport = QtWidgets.QLineEdit(self.tcpGroup)
         self.IPport.setObjectName("IPport")
-        self.horizontalLayout_8.addWidget(self.IPport)
+        self.horizontalLayout_8.addWidget(self.IPport, 1)
         self.verticalLayout_4.addLayout(self.horizontalLayout_8)
-        self.line_7 = QtWidgets.QFrame(self.tab_2)
+        self.line_7 = QtWidgets.QFrame(self.tcpGroup)
         self.line_7.setFrameShape(QtWidgets.QFrame.HLine)
         self.line_7.setFrameShadow(QtWidgets.QFrame.Sunken)
         self.line_7.setObjectName("line_7")
-        self.verticalLayout_4.addWidget(self.line_7)
-        self.label_10 = QtWidgets.QLabel(self.tab_2)
+        self.line_7.setVisible(False)
+        self.label_10 = QtWidgets.QLabel(self.tcpGroup)
         self.label_10.setObjectName("label_10")
         self.verticalLayout_4.addWidget(self.label_10)
-        self.serverList = QtWidgets.QComboBox(self.tab_2)
+        self.serverList = QtWidgets.QComboBox(self.tcpGroup)
         self.serverList.setObjectName("serverList")
         self.verticalLayout_4.addWidget(self.serverList)
-        self.scanServer = QtWidgets.QPushButton(self.tab_2)
+        self.scanServer = QtWidgets.QPushButton(self.tcpGroup)
         self.scanServer.setObjectName("scanServer")
         self.verticalLayout_4.addWidget(self.scanServer)
-        self.line_8 = QtWidgets.QFrame(self.tab_2)
+        self.line_8 = QtWidgets.QFrame(self.tcpGroup)
         self.line_8.setFrameShape(QtWidgets.QFrame.HLine)
         self.line_8.setFrameShadow(QtWidgets.QFrame.Sunken)
         self.line_8.setObjectName("line_8")
-        self.verticalLayout_4.addWidget(self.line_8)
-        self.TCPInfo = QtWidgets.QTextBrowser(self.tab_2)
-        self.TCPInfo.setObjectName("TCPInfo")
-        self.verticalLayout_4.addWidget(self.TCPInfo)
-        spacerItem1 = QtWidgets.QSpacerItem(20, 40, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Expanding)
-        self.verticalLayout_4.addItem(spacerItem1)
-        self.TCPconnect = QtWidgets.QPushButton(self.tab_2)
+        self.line_8.setVisible(False)
+        self.TCPconnect = QtWidgets.QPushButton(self.tcpGroup)
         self.TCPconnect.setObjectName("TCPconnect")
         self.verticalLayout_4.addWidget(self.TCPconnect)
-        self.TCPdisconnect = QtWidgets.QPushButton(self.tab_2)
+        self.TCPdisconnect = QtWidgets.QPushButton(self.tcpGroup)
         self.TCPdisconnect.setObjectName("TCPdisconnect")
         self.verticalLayout_4.addWidget(self.TCPdisconnect)
-        self.tabWidget.addTab(self.tab_2, "")
-        self.verticalLayout_3.addWidget(self.tabWidget)
-        self.gridLayout.addLayout(self.verticalLayout_3, 1, 0, 1, 1)
-        self.verticalLayout = QtWidgets.QVBoxLayout()
+        self.leftPanelLayout.addWidget(self.tcpGroup)
+
+        self.logGroup = QtWidgets.QGroupBox(self.leftPanel)
+        self.logGroup.setObjectName("logGroup")
+        self.logGroupLayout = QtWidgets.QVBoxLayout(self.logGroup)
+        self.logGroupLayout.setObjectName("logGroupLayout")
+        self.portInfoLabel = QtWidgets.QLabel(self.logGroup)
+        self.portInfoLabel.setObjectName("portInfoLabel")
+        self.logGroupLayout.addWidget(self.portInfoLabel)
+        self.portInfo = QtWidgets.QTextBrowser(self.logGroup)
+        self.portInfo.setObjectName("portInfo")
+        self.logGroupLayout.addWidget(self.portInfo, 1)
+        self.TCPInfoLabel = QtWidgets.QLabel(self.logGroup)
+        self.TCPInfoLabel.setObjectName("TCPInfoLabel")
+        self.logGroupLayout.addWidget(self.TCPInfoLabel)
+        self.TCPInfo = QtWidgets.QTextBrowser(self.logGroup)
+        self.TCPInfo.setObjectName("TCPInfo")
+        self.logGroupLayout.addWidget(self.TCPInfo, 1)
+        self.leftPanelLayout.addWidget(self.logGroup, 1)
+
+        self.leftContainerLayout.addWidget(self.leftPanel)
+        self.toggleSidebarBtn = QtWidgets.QPushButton(self.leftContainer)
+        self.toggleSidebarBtn.setObjectName("toggleSidebarBtn")
+        self.toggleSidebarBtn.setFixedSize(20, 60)
+        self.leftContainerLayout.addWidget(self.toggleSidebarBtn, 0, QtCore.Qt.AlignVCenter)
+        self.gridLayout.addWidget(self.leftContainer, 1, 0, 1, 1)
+        self.rightPanel = QtWidgets.QFrame(self.centralwidget)
+        self.rightPanel.setObjectName("rightPanel")
+        self.rightPanelLayout = QtWidgets.QVBoxLayout(self.rightPanel)
+        self.rightPanelLayout.setContentsMargins(10, 10, 10, 10)
+        self.rightPanelLayout.setSpacing(8)
+
+        self.channelScrollArea = QtWidgets.QScrollArea(self.rightPanel)
+        self.channelScrollArea.setObjectName("channelScrollArea")
+        self.channelScrollArea.setWidgetResizable(True)
+        self.channelScrollArea.setFrameShape(QtWidgets.QFrame.NoFrame)
+        self.channelScrollArea.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        self.channelScrollArea.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        self.channelScrollContent = QtWidgets.QWidget()
+        self.channelScrollContent.setObjectName("channelScrollContent")
+        self.channelScrollContent.setMinimumWidth(1160)
+        self.verticalLayout = QtWidgets.QVBoxLayout(self.channelScrollContent)
+        self.verticalLayout.setContentsMargins(8, 8, 8, 8)
+        self.verticalLayout.setSpacing(8)
         self.verticalLayout.setObjectName("verticalLayout")
-        self.gridLayout_2 = QtWidgets.QGridLayout()
+        self.CH1_card, self.gridLayout_2 = self._create_channel_card(1, self.channelScrollContent)
         self.gridLayout_2.setObjectName("gridLayout_2")
         spacerItem2 = QtWidgets.QSpacerItem(40, 20, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
-        self.gridLayout_2.addItem(spacerItem2, 1, 6, 1, 1)
+        self.gridLayout_2.addItem(spacerItem2, 2, 6, 1, 1)
         self.CH1_Value = QtWidgets.QLCDNumber(self.centralwidget)
         font = QtGui.QFont()
         font.setUnderline(False)
@@ -204,6 +664,9 @@ class Ui_MainWindow(object):
         self.CH1_Value.setProperty("value", 0.0)
         self.CH1_Value.setObjectName("CH1_Value")
         self.gridLayout_2.addWidget(self.CH1_Value, 0, 2, 1, 1)
+        self.CH1_currentLabel = QtWidgets.QLabel(self.centralwidget)
+        self.CH1_currentLabel.setObjectName("CH1_currentLabel")
+        self.gridLayout_2.addWidget(self.CH1_currentLabel, 1, 2, 1, 1)
         self.horizontalLayout = QtWidgets.QHBoxLayout()
         self.horizontalLayout.setObjectName("horizontalLayout")
         self.CH1Twave = QtWidgets.QComboBox(self.centralwidget)
@@ -237,16 +700,16 @@ class Ui_MainWindow(object):
         font.setPointSize(12)
         self.CH1_2.setFont(font)
         self.CH1_2.setObjectName("CH1_2")
-        self.gridLayout_2.addWidget(self.CH1_2, 0, 3, 1, 1)
+        self.gridLayout_2.addWidget(self.CH1_2, 1, 4, 1, 1)
         spacerItem3 = QtWidgets.QSpacerItem(40, 0, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
-        self.gridLayout_2.addItem(spacerItem3, 1, 2, 1, 1)
+        self.gridLayout_2.addItem(spacerItem3, 2, 2, 1, 1)
         self.CH1_max = QtWidgets.QLCDNumber(self.centralwidget)
         self.CH1_max.setDigitCount(7)
         self.CH1_max.setSegmentStyle(QtWidgets.QLCDNumber.Flat)
         self.CH1_max.setObjectName("CH1_max")
         self.gridLayout_2.addWidget(self.CH1_max, 0, 4, 1, 1)
         spacerItem4 = QtWidgets.QSpacerItem(40, 20, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
-        self.gridLayout_2.addItem(spacerItem4, 1, 4, 1, 1)
+        self.gridLayout_2.addItem(spacerItem4, 2, 4, 1, 1)
         self.CH1_3 = QtWidgets.QLabel(self.centralwidget)
         self.CH1_3.setMinimumSize(QtCore.QSize(40, 0))
         font = QtGui.QFont()
@@ -254,7 +717,7 @@ class Ui_MainWindow(object):
         font.setPointSize(12)
         self.CH1_3.setFont(font)
         self.CH1_3.setObjectName("CH1_3")
-        self.gridLayout_2.addWidget(self.CH1_3, 0, 5, 1, 1)
+        self.gridLayout_2.addWidget(self.CH1_3, 1, 6, 1, 1)
         self.frame = QtWidgets.QFrame(self.centralwidget)
         self.frame.setMinimumSize(QtCore.QSize(200, 100))
         self.frame.setFrameShape(QtWidgets.QFrame.StyledPanel)
@@ -280,13 +743,13 @@ class Ui_MainWindow(object):
         self.CH1_name.setFont(font)
         self.CH1_name.setObjectName("CH1_name")
         self.gridLayout_2.addWidget(self.CH1_name, 0, 0, 2, 1)
-        self.verticalLayout.addLayout(self.gridLayout_2)
+        self.verticalLayout.addWidget(self.CH1_card)
         self.line = QtWidgets.QFrame(self.centralwidget)
         self.line.setFrameShape(QtWidgets.QFrame.HLine)
         self.line.setFrameShadow(QtWidgets.QFrame.Sunken)
         self.line.setObjectName("line")
-        self.verticalLayout.addWidget(self.line)
-        self.gridLayout_3 = QtWidgets.QGridLayout()
+        self.line.setVisible(False)
+        self.CH2_card, self.gridLayout_3 = self._create_channel_card(2, self.channelScrollContent)
         self.gridLayout_3.setObjectName("gridLayout_3")
         self.CH2_3 = QtWidgets.QLabel(self.centralwidget)
         self.CH2_3.setMinimumSize(QtCore.QSize(40, 0))
@@ -295,14 +758,14 @@ class Ui_MainWindow(object):
         font.setPointSize(12)
         self.CH2_3.setFont(font)
         self.CH2_3.setObjectName("CH2_3")
-        self.gridLayout_3.addWidget(self.CH2_3, 0, 5, 1, 1)
+        self.gridLayout_3.addWidget(self.CH2_3, 1, 6, 1, 1)
         self.CH2_min = QtWidgets.QLCDNumber(self.centralwidget)
         self.CH2_min.setDigitCount(7)
         self.CH2_min.setSegmentStyle(QtWidgets.QLCDNumber.Flat)
         self.CH2_min.setObjectName("CH2_min")
         self.gridLayout_3.addWidget(self.CH2_min, 0, 6, 1, 1)
         spacerItem5 = QtWidgets.QSpacerItem(40, 20, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
-        self.gridLayout_3.addItem(spacerItem5, 1, 4, 1, 1)
+        self.gridLayout_3.addItem(spacerItem5, 2, 4, 1, 1)
         self.CH2_2 = QtWidgets.QLabel(self.centralwidget)
         self.CH2_2.setMinimumSize(QtCore.QSize(40, 0))
         font = QtGui.QFont()
@@ -310,7 +773,7 @@ class Ui_MainWindow(object):
         font.setPointSize(12)
         self.CH2_2.setFont(font)
         self.CH2_2.setObjectName("CH2_2")
-        self.gridLayout_3.addWidget(self.CH2_2, 0, 3, 1, 1)
+        self.gridLayout_3.addWidget(self.CH2_2, 1, 4, 1, 1)
         self.horizontalLayout_4 = QtWidgets.QHBoxLayout()
         self.horizontalLayout_4.setObjectName("horizontalLayout_4")
         self.CH2Twave = QtWidgets.QComboBox(self.centralwidget)
@@ -349,7 +812,7 @@ class Ui_MainWindow(object):
         self.CH2_max.setObjectName("CH2_max")
         self.gridLayout_3.addWidget(self.CH2_max, 0, 4, 1, 1)
         spacerItem6 = QtWidgets.QSpacerItem(40, 20, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
-        self.gridLayout_3.addItem(spacerItem6, 1, 6, 1, 1)
+        self.gridLayout_3.addItem(spacerItem6, 2, 6, 1, 1)
         self.CH2_wave = QtWidgets.QLabel(self.centralwidget)
         self.CH2_wave.setMinimumSize(QtCore.QSize(100, 0))
         font = QtGui.QFont()
@@ -358,7 +821,7 @@ class Ui_MainWindow(object):
         self.CH2_wave.setObjectName("CH2_wave")
         self.gridLayout_3.addWidget(self.CH2_wave, 0, 1, 1, 1)
         spacerItem7 = QtWidgets.QSpacerItem(40, 0, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
-        self.gridLayout_3.addItem(spacerItem7, 1, 2, 1, 1)
+        self.gridLayout_3.addItem(spacerItem7, 2, 2, 1, 1)
         self.CH2_Value = QtWidgets.QLCDNumber(self.centralwidget)
         font = QtGui.QFont()
         font.setUnderline(False)
@@ -372,6 +835,9 @@ class Ui_MainWindow(object):
         self.CH2_Value.setProperty("value", 0.0)
         self.CH2_Value.setObjectName("CH2_Value")
         self.gridLayout_3.addWidget(self.CH2_Value, 0, 2, 1, 1)
+        self.CH2_currentLabel = QtWidgets.QLabel(self.centralwidget)
+        self.CH2_currentLabel.setObjectName("CH2_currentLabel")
+        self.gridLayout_3.addWidget(self.CH2_currentLabel, 1, 2, 1, 1)
         self.CH2_name = QtWidgets.QLineEdit(self.centralwidget)
         self.CH2_name.setMinimumSize(QtCore.QSize(100, 0))
         font = QtGui.QFont()
@@ -379,16 +845,16 @@ class Ui_MainWindow(object):
         self.CH2_name.setFont(font)
         self.CH2_name.setObjectName("CH2_name")
         self.gridLayout_3.addWidget(self.CH2_name, 0, 0, 2, 1)
-        self.verticalLayout.addLayout(self.gridLayout_3)
+        self.verticalLayout.addWidget(self.CH2_card)
         self.line_2 = QtWidgets.QFrame(self.centralwidget)
         self.line_2.setFrameShape(QtWidgets.QFrame.HLine)
         self.line_2.setFrameShadow(QtWidgets.QFrame.Sunken)
         self.line_2.setObjectName("line_2")
-        self.verticalLayout.addWidget(self.line_2)
-        self.gridLayout_5 = QtWidgets.QGridLayout()
+        self.line_2.setVisible(False)
+        self.CH3_card, self.gridLayout_5 = self._create_channel_card(3, self.channelScrollContent)
         self.gridLayout_5.setObjectName("gridLayout_5")
         spacerItem8 = QtWidgets.QSpacerItem(40, 20, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
-        self.gridLayout_5.addItem(spacerItem8, 1, 5, 1, 1)
+        self.gridLayout_5.addItem(spacerItem8, 2, 5, 1, 1)
         self.CH3_max = QtWidgets.QLCDNumber(self.centralwidget)
         self.CH3_max.setDigitCount(7)
         self.CH3_max.setSegmentStyle(QtWidgets.QLCDNumber.Flat)
@@ -414,7 +880,7 @@ class Ui_MainWindow(object):
         self.horizontalLayout_5.addWidget(self.saveCH3Plot)
         self.gridLayout_5.addLayout(self.horizontalLayout_5, 1, 1, 1, 1)
         spacerItem9 = QtWidgets.QSpacerItem(40, 0, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
-        self.gridLayout_5.addItem(spacerItem9, 1, 2, 1, 1)
+        self.gridLayout_5.addItem(spacerItem9, 2, 2, 1, 1)
         self.CH3_Value = QtWidgets.QLCDNumber(self.centralwidget)
         font = QtGui.QFont()
         font.setUnderline(False)
@@ -428,6 +894,9 @@ class Ui_MainWindow(object):
         self.CH3_Value.setProperty("value", 0.0)
         self.CH3_Value.setObjectName("CH3_Value")
         self.gridLayout_5.addWidget(self.CH3_Value, 0, 2, 1, 1)
+        self.CH3_currentLabel = QtWidgets.QLabel(self.centralwidget)
+        self.CH3_currentLabel.setObjectName("CH3_currentLabel")
+        self.gridLayout_5.addWidget(self.CH3_currentLabel, 1, 2, 1, 1)
         self.frame_4 = QtWidgets.QFrame(self.centralwidget)
         self.frame_4.setMinimumSize(QtCore.QSize(200, 100))
         self.frame_4.setFrameShape(QtWidgets.QFrame.StyledPanel)
@@ -442,7 +911,7 @@ class Ui_MainWindow(object):
         self.gridLayout_10.addLayout(self.CH3_Plot_layout, 0, 0, 1, 1)
         self.gridLayout_5.addWidget(self.frame_4, 0, 8, 2, 1)
         spacerItem10 = QtWidgets.QSpacerItem(40, 20, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
-        self.gridLayout_5.addItem(spacerItem10, 1, 7, 1, 1)
+        self.gridLayout_5.addItem(spacerItem10, 2, 7, 1, 1)
         self.CH3_2 = QtWidgets.QLabel(self.centralwidget)
         self.CH3_2.setMinimumSize(QtCore.QSize(40, 0))
         font = QtGui.QFont()
@@ -450,7 +919,7 @@ class Ui_MainWindow(object):
         font.setPointSize(12)
         self.CH3_2.setFont(font)
         self.CH3_2.setObjectName("CH3_2")
-        self.gridLayout_5.addWidget(self.CH3_2, 0, 4, 1, 1)
+        self.gridLayout_5.addWidget(self.CH3_2, 1, 5, 1, 1)
         self.CH3_3 = QtWidgets.QLabel(self.centralwidget)
         self.CH3_3.setMinimumSize(QtCore.QSize(40, 0))
         font = QtGui.QFont()
@@ -458,7 +927,7 @@ class Ui_MainWindow(object):
         font.setPointSize(12)
         self.CH3_3.setFont(font)
         self.CH3_3.setObjectName("CH3_3")
-        self.gridLayout_5.addWidget(self.CH3_3, 0, 6, 1, 1)
+        self.gridLayout_5.addWidget(self.CH3_3, 1, 7, 1, 1)
         self.CH3_min = QtWidgets.QLCDNumber(self.centralwidget)
         self.CH3_min.setDigitCount(7)
         self.CH3_min.setSegmentStyle(QtWidgets.QLCDNumber.Flat)
@@ -478,13 +947,13 @@ class Ui_MainWindow(object):
         self.CH3_name.setFont(font)
         self.CH3_name.setObjectName("CH3_name")
         self.gridLayout_5.addWidget(self.CH3_name, 0, 0, 2, 1)
-        self.verticalLayout.addLayout(self.gridLayout_5)
+        self.verticalLayout.addWidget(self.CH3_card)
         self.line_3 = QtWidgets.QFrame(self.centralwidget)
         self.line_3.setFrameShape(QtWidgets.QFrame.HLine)
         self.line_3.setFrameShadow(QtWidgets.QFrame.Sunken)
         self.line_3.setObjectName("line_3")
-        self.verticalLayout.addWidget(self.line_3)
-        self.gridLayout_6 = QtWidgets.QGridLayout()
+        self.line_3.setVisible(False)
+        self.CH4_card, self.gridLayout_6 = self._create_channel_card(4, self.channelScrollContent)
         self.gridLayout_6.setObjectName("gridLayout_6")
         self.horizontalLayout_6 = QtWidgets.QHBoxLayout()
         self.horizontalLayout_6.setObjectName("horizontalLayout_6")
@@ -506,7 +975,7 @@ class Ui_MainWindow(object):
         self.horizontalLayout_6.addWidget(self.saveCH4Plot)
         self.gridLayout_6.addLayout(self.horizontalLayout_6, 1, 1, 1, 1)
         spacerItem11 = QtWidgets.QSpacerItem(40, 20, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
-        self.gridLayout_6.addItem(spacerItem11, 1, 5, 1, 1)
+        self.gridLayout_6.addItem(spacerItem11, 2, 5, 1, 1)
         self.frame_5 = QtWidgets.QFrame(self.centralwidget)
         self.frame_5.setMinimumSize(QtCore.QSize(200, 100))
         self.frame_5.setFrameShape(QtWidgets.QFrame.StyledPanel)
@@ -521,14 +990,14 @@ class Ui_MainWindow(object):
         self.gridLayout_11.addLayout(self.CH4_Plot_layout, 0, 0, 1, 1)
         self.gridLayout_6.addWidget(self.frame_5, 0, 8, 2, 1)
         spacerItem12 = QtWidgets.QSpacerItem(40, 20, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
-        self.gridLayout_6.addItem(spacerItem12, 1, 7, 1, 1)
+        self.gridLayout_6.addItem(spacerItem12, 2, 7, 1, 1)
         self.CH4_max = QtWidgets.QLCDNumber(self.centralwidget)
         self.CH4_max.setDigitCount(7)
         self.CH4_max.setSegmentStyle(QtWidgets.QLCDNumber.Flat)
         self.CH4_max.setObjectName("CH4_max")
         self.gridLayout_6.addWidget(self.CH4_max, 0, 5, 1, 1)
         spacerItem13 = QtWidgets.QSpacerItem(40, 0, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
-        self.gridLayout_6.addItem(spacerItem13, 1, 2, 1, 1)
+        self.gridLayout_6.addItem(spacerItem13, 2, 2, 1, 1)
         self.CH4_3 = QtWidgets.QLabel(self.centralwidget)
         self.CH4_3.setMinimumSize(QtCore.QSize(40, 0))
         font = QtGui.QFont()
@@ -536,7 +1005,7 @@ class Ui_MainWindow(object):
         font.setPointSize(12)
         self.CH4_3.setFont(font)
         self.CH4_3.setObjectName("CH4_3")
-        self.gridLayout_6.addWidget(self.CH4_3, 0, 6, 1, 1)
+        self.gridLayout_6.addWidget(self.CH4_3, 1, 7, 1, 1)
         self.CH4_wave = QtWidgets.QLabel(self.centralwidget)
         self.CH4_wave.setMinimumSize(QtCore.QSize(100, 0))
         font = QtGui.QFont()
@@ -551,7 +1020,7 @@ class Ui_MainWindow(object):
         font.setPointSize(12)
         self.CH4_2.setFont(font)
         self.CH4_2.setObjectName("CH4_2")
-        self.gridLayout_6.addWidget(self.CH4_2, 0, 4, 1, 1)
+        self.gridLayout_6.addWidget(self.CH4_2, 1, 5, 1, 1)
         self.CH4_Value = QtWidgets.QLCDNumber(self.centralwidget)
         font = QtGui.QFont()
         font.setUnderline(False)
@@ -565,6 +1034,9 @@ class Ui_MainWindow(object):
         self.CH4_Value.setProperty("value", 0.0)
         self.CH4_Value.setObjectName("CH4_Value")
         self.gridLayout_6.addWidget(self.CH4_Value, 0, 2, 1, 1)
+        self.CH4_currentLabel = QtWidgets.QLabel(self.centralwidget)
+        self.CH4_currentLabel.setObjectName("CH4_currentLabel")
+        self.gridLayout_6.addWidget(self.CH4_currentLabel, 1, 2, 1, 1)
         self.CH4_min = QtWidgets.QLCDNumber(self.centralwidget)
         self.CH4_min.setDigitCount(7)
         self.CH4_min.setSegmentStyle(QtWidgets.QLCDNumber.Flat)
@@ -577,36 +1049,43 @@ class Ui_MainWindow(object):
         self.CH4_name.setFont(font)
         self.CH4_name.setObjectName("CH4_name")
         self.gridLayout_6.addWidget(self.CH4_name, 0, 0, 2, 1)
-        self.verticalLayout.addLayout(self.gridLayout_6)
+        self.verticalLayout.addWidget(self.CH4_card)
         self.line_5 = QtWidgets.QFrame(self.centralwidget)
         self.line_5.setFrameShape(QtWidgets.QFrame.HLine)
         self.line_5.setFrameShadow(QtWidgets.QFrame.Sunken)
         self.line_5.setObjectName("line_5")
-        self.verticalLayout.addWidget(self.line_5)
+        self.line_5.setVisible(False)
         spacerItem14 = QtWidgets.QSpacerItem(40, 0, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
         self.verticalLayout.addItem(spacerItem14)
-        self.horizontalLayout_3 = QtWidgets.QHBoxLayout()
+        self.channelScrollArea.setWidget(self.channelScrollContent)
+        self.rightPanelLayout.addWidget(self.channelScrollArea, 1)
+        self.bottomButtonBar = QtWidgets.QFrame(self.rightPanel)
+        self.bottomButtonBar.setObjectName("bottomButtonBar")
+        self.horizontalLayout_3 = QtWidgets.QGridLayout(self.bottomButtonBar)
+        self.horizontalLayout_3.setContentsMargins(8, 8, 8, 8)
+        self.horizontalLayout_3.setHorizontalSpacing(8)
+        self.horizontalLayout_3.setVerticalSpacing(6)
         self.horizontalLayout_3.setObjectName("horizontalLayout_3")
         self.Connect = QtWidgets.QPushButton(self.centralwidget)
         self.Connect.setObjectName("Connect")
-        self.horizontalLayout_3.addWidget(self.Connect)
+        self.horizontalLayout_3.addWidget(self.Connect, 0, 0, 1, 1)
         self.startRecordBtn = QtWidgets.QPushButton(self.centralwidget)
         self.startRecordBtn.setObjectName("startRecordBtn")
-        self.horizontalLayout_3.addWidget(self.startRecordBtn)
+        self.horizontalLayout_3.addWidget(self.startRecordBtn, 0, 1, 1, 1)
         self.stopRecordBtn = QtWidgets.QPushButton(self.centralwidget)
         self.stopRecordBtn.setObjectName("stopRecordBtn")
-        self.horizontalLayout_3.addWidget(self.stopRecordBtn)
+        self.horizontalLayout_3.addWidget(self.stopRecordBtn, 0, 2, 1, 1)
         self.Disconnect = QtWidgets.QPushButton(self.centralwidget)
         self.Disconnect.setObjectName("Disconnect")
-        self.horizontalLayout_3.addWidget(self.Disconnect)
+        self.horizontalLayout_3.addWidget(self.Disconnect, 1, 0, 1, 1)
         self.Clean = QtWidgets.QPushButton(self.centralwidget)
         self.Clean.setObjectName("Clean")
-        self.horizontalLayout_3.addWidget(self.Clean)
+        self.horizontalLayout_3.addWidget(self.Clean, 1, 1, 1, 1)
         self.saveAllPlots = QtWidgets.QPushButton(self.centralwidget)
         self.saveAllPlots.setObjectName("saveAllPlots")
-        self.horizontalLayout_3.addWidget(self.saveAllPlots)
-        self.verticalLayout.addLayout(self.horizontalLayout_3)
-        self.gridLayout.addLayout(self.verticalLayout, 1, 2, 1, 1)
+        self.horizontalLayout_3.addWidget(self.saveAllPlots, 1, 2, 1, 1)
+        self.rightPanelLayout.addWidget(self.bottomButtonBar)
+        self.gridLayout.addWidget(self.rightPanel, 1, 2, 1, 1)
         self.line_4 = QtWidgets.QFrame(self.centralwidget)
         self.line_4.setFrameShape(QtWidgets.QFrame.VLine)
         self.line_4.setFrameShadow(QtWidgets.QFrame.Sunken)
@@ -633,14 +1112,14 @@ class Ui_MainWindow(object):
         MainWindow.setCentralWidget(self.centralwidget)
 
         self.retranslateUi(MainWindow)
-        self.tabWidget.setCurrentIndex(0)
+        self._apply_unified_style(MainWindow)
         QtCore.QMetaObject.connectSlotsByName(MainWindow)
 
     def retranslateUi(self, MainWindow):
         _translate = QtCore.QCoreApplication.translate
         MainWindow.setWindowTitle(_translate("MainWindow", "嘉慧功率计控制台"))
         self.label_3.setText(_translate("MainWindow", "数据源"))
-        self.label.setText(_translate("MainWindow", "串口设置"))
+        self.serialGroup.setTitle(_translate("MainWindow", "串口设置"))
         self.label_2.setText(_translate("MainWindow", "串口号"))
         self.ComCheck.setText(_translate("MainWindow", "检查串口"))
         self.label_8.setText(_translate("MainWindow", "服务 IP "))
@@ -648,15 +1127,17 @@ class Ui_MainWindow(object):
         self.RestartHost.setText(_translate("MainWindow", "重启服务"))
         self.openPort.setText(_translate("MainWindow", "打开串口"))
         self.closePort.setText(_translate("MainWindow", "关闭串口"))
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab), _translate("MainWindow", "串口"))
-        self.label_6.setText(_translate("MainWindow", "网络设置"))
+        self.tcpGroup.setTitle(_translate("MainWindow", "网络设置"))
         self.label_4.setText(_translate("MainWindow", "IP地址"))
         self.label_5.setText(_translate("MainWindow", "IP端口"))
         self.label_10.setText(_translate("MainWindow", "局域网服务"))
         self.scanServer.setText(_translate("MainWindow", "自动发现"))
         self.TCPconnect.setText(_translate("MainWindow", "链接"))
         self.TCPdisconnect.setText(_translate("MainWindow", "断开"))
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab_2), _translate("MainWindow", "TCP"))
+        self.logGroup.setTitle(_translate("MainWindow", "日志输出"))
+        self.portInfoLabel.setText(_translate("MainWindow", "串口日志"))
+        self.TCPInfoLabel.setText(_translate("MainWindow", "TCP 日志"))
+        self.toggleSidebarBtn.setText(_translate("MainWindow", "◀"))
         self.CH1Twave.setItemText(0, _translate("MainWindow", "1550nm"))
         self.CH1Twave.setItemText(1, _translate("MainWindow", "850nm"))
         self.CH1Twave.setItemText(2, _translate("MainWindow", "1300nm"))
@@ -666,6 +1147,7 @@ class Ui_MainWindow(object):
         self.setCH1wave.setText(_translate("MainWindow", "设置"))
         self.saveCH1Plot.setText(_translate("MainWindow", "保存图片"))
         self.CH1_wave.setText(_translate("MainWindow", "波长值：未知"))
+        self.CH1_currentLabel.setText(_translate("MainWindow", "当前值"))
         self.CH1_2.setText(_translate("MainWindow", "最大值"))
         self.CH1_3.setText(_translate("MainWindow", "最小值"))
         self.CH1_name.setText(_translate("MainWindow", "通道1"))
@@ -680,6 +1162,7 @@ class Ui_MainWindow(object):
         self.setCH2wave.setText(_translate("MainWindow", "设置"))
         self.saveCH2Plot.setText(_translate("MainWindow", "保存图片"))
         self.CH2_wave.setText(_translate("MainWindow", "波长值：未知"))
+        self.CH2_currentLabel.setText(_translate("MainWindow", "当前值"))
         self.CH2_name.setText(_translate("MainWindow", "通道2"))
         self.CH3Twave.setItemText(0, _translate("MainWindow", "1550nm"))
         self.CH3Twave.setItemText(1, _translate("MainWindow", "850nm"))
@@ -692,6 +1175,7 @@ class Ui_MainWindow(object):
         self.CH3_2.setText(_translate("MainWindow", "最大值"))
         self.CH3_3.setText(_translate("MainWindow", "最小值"))
         self.CH3_wave.setText(_translate("MainWindow", "波长值：未知"))
+        self.CH3_currentLabel.setText(_translate("MainWindow", "当前值"))
         self.CH3_name.setText(_translate("MainWindow", "通道3"))
         self.CH4Twave.setItemText(0, _translate("MainWindow", "1550nm"))
         self.CH4Twave.setItemText(1, _translate("MainWindow", "850nm"))
@@ -704,6 +1188,7 @@ class Ui_MainWindow(object):
         self.CH4_3.setText(_translate("MainWindow", "最小值"))
         self.CH4_wave.setText(_translate("MainWindow", "波长值：未知"))
         self.CH4_2.setText(_translate("MainWindow", "最大值"))
+        self.CH4_currentLabel.setText(_translate("MainWindow", "当前值"))
         self.CH4_name.setText(_translate("MainWindow", "通道4"))
         self.Connect.setText(_translate("MainWindow", "链接功率计"))
         self.startRecordBtn.setText(_translate("MainWindow", "开始记录"))

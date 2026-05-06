@@ -32,6 +32,7 @@ import threading
 import json
 import socket
 import base64
+import sys
 import pandas as pd
 from queue import Queue
 from devices.JW8103A import JW8103A
@@ -70,7 +71,20 @@ def showAbout(self):
     aboutWin = QtWidgets.QDialog(self)
     aboutWin.setWindowTitle("关于")
     aboutWin.resize(400, 300)
-    aboutWin.setStyleSheet("background-color: #FFFFFF;color: #000000;font: 12pt \"微软雅黑\";")
+    aboutWin.setStyleSheet("""
+        QDialog {
+            background-color: #ffffff;
+            border: 1px solid #d0d0d0;
+            border-radius: 8px;
+        }
+        QTextEdit {
+            background-color: #fafafa;
+            color: #333333;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            font: 12pt "微软雅黑";
+        }
+    """)
     # 创建 QTextEdit 控件
     aboutText = QtWidgets.QTextEdit(aboutWin)
     aboutText.setReadOnly(True)
@@ -841,3 +855,16 @@ class JW8103A_Control(QtWidgets.QMainWindow, Ui_MainWindow):
             event.accept()
         else:
             event.ignore()
+
+
+def main():
+    QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling)
+    app = QtWidgets.QApplication(sys.argv)
+    app.setStyle("Fusion")
+    window = JW8103A_Control()
+    window.show()
+    sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
+    main()
