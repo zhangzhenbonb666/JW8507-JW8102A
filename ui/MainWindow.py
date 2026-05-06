@@ -4,13 +4,15 @@ JW8507 程控衰减器控制主界面
 import socket
 import sys
 import json
+import os
+import time
 from datetime import datetime
 import serial
 import serial.tools.list_ports
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QLabel, QComboBox, QPushButton, QScrollArea, QFrame,
-    QGroupBox, QTextEdit, QSplitter, QMessageBox
+    QGroupBox, QTextEdit, QSplitter, QMessageBox, QLineEdit
 )
 from PyQt5.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, pyqtSignal, QObject
 from PyQt5.QtGui import QFont
@@ -49,6 +51,12 @@ class MainWindow(QMainWindow):
         self.config = self._load_config()
         self.sidebar_expanded = True  # 侧边栏展开状态
         self.sidebar_width = 280  # 侧边栏宽度
+        self.recording = False
+        self.record_filename = ""
+        self.record_filepath = ""
+        self._record_row_count = 0
+        self.record_timer = QTimer(self)
+        self.record_timer.timeout.connect(self._record_data)
         self.connected = False
         # 初始化文件日志记录器
         self.file_logger = setup_file_logger(
@@ -518,6 +526,67 @@ class MainWindow(QMainWindow):
         log_layout.addWidget(self.log_text)
         
         layout.addWidget(log_group)
+
+        # ===== 数据存储组 =====
+        storage_group = QGroupBox("数据存储")
+        storage_group.setStyleSheet("""
+            QGroupBox {
+                color: #333333;
+                font-size: 14px;
+                font-weight: bold;
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+                margin-top: 10px;
+                padding-top: 10px;
+                background-color: #ffffff;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+        """)
+        storage_layout = QVBoxLayout(storage_group)
+        storage_layout.setSpacing(8)
+
+        self.filename_input = QLineEdit()
+        self.filename_input.setPlaceholderText("请输入文件名（如: 测试数据）")
+        self.filename_input.setMinimumHeight(30)
+        self.filename_input.setStyleSheet("""
+            QLineEdit {
+                border: 1px solid #d0d0d0;
+                border-radius: 3px;
+                padding: 4px 8px;
+                font-size: 13px;
+                color: #333333;
+                background-color: #fafafa;
+            }
+            QLineEdit:focus {
+                border-color: #4a9eff;
+            }
+        """)
+        storage_layout.addWidget(self.filename_input)
+
+        self.record_btn = QPushButton("开启存储")
+        self.record_btn.setCheckable(True)
+        self.record_btn.setChecked(False)
+        self.record_btn.setMinimumHeight(34)
+        self.record_btn.setStyleSheet(self._get_button_style("#28a745", "#218838"))
+        self.record_btn.clicked.connect(self._on_toggle_record)
+        storage_layout.addWidget(self.record_btn)
+
+        self.record_status_label = QLabel("")
+        self.record_status_label.setStyleSheet("""
+            color: #888888;
+            font-size: 12px;
+            border: none;
+            background: transparent;
+        """)
+        self.record_status_label.setAlignment(Qt.AlignCenter)
+        self.record_status_label.setWordWrap(True)
+        storage_layout.addWidget(self.record_status_label)
+
+        layout.addWidget(storage_group)
         
         # 弹性空间
         layout.addStretch()
@@ -720,6 +789,94 @@ class MainWindow(QMainWindow):
             self.animation.finished.connect(lambda: self.left_panel.hide() if not self.sidebar_expanded else None)
         
         self.animation.start()
+
+    def _on_toggle_record(self):
+        """开启/停止数据存储。"""
+        if not self.record_btn.isChecked():
+            self._stop_recording(f"已保存 {self._record_row_count} 条数据")
+            self._log(f"停止数据存储，共记录 {self._record_row_count} 条数据")
+            return
+
+        filename = self.filename_input.text().strip()
+        if not filename:
+            QMessageBox.warning(self, "提示", "请输入文件名", QMessageBox.Ok)
+            self.record_btn.setChecked(False)
+            return
+
+        if not self.connected:
+            QMessageBox.warning(self, "提示", "请先连接设备", QMessageBox.Ok)
+            self.record_btn.setChecked(False)
+            return
+
+        record_dir = os.path.join(".", "Record")
+        os.makedirs(record_dir, exist_ok=True)
+
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        safe_filename = "".join("_" if ch in r'\/:*?"<>|' else ch for ch in filename)
+        safe_filename = safe_filename.strip().strip(".") or "record"
+        self.record_filepath = os.path.join(record_dir, f"{safe_filename}_{timestamp}.xlsx")
+        self.record_filename = filename
+        self._record_row_count = 0
+
+        self.record_btn.setText("停止存储")
+        self.record_btn.setStyleSheet(self._get_button_style("#dc3545", "#c82333"))
+        self.filename_input.setEnabled(False)
+        self.record_status_label.setText("准备记录...")
+
+        self.recording = True
+        self.record_timer.start(1000)
+        self._log(f"开始数据存储，文件: {self.record_filepath}")
+
+    def _stop_recording(self, status_text=None, log_message=None):
+        """停止数据记录并恢复存储控件状态。"""
+        was_recording = self.recording or self.record_timer.isActive()
+        self.record_timer.stop()
+        self.recording = False
+
+        if hasattr(self, "record_btn"):
+            self.record_btn.setChecked(False)
+            self.record_btn.setText("开启存储")
+            self.record_btn.setStyleSheet(self._get_button_style("#28a745", "#218838"))
+        if hasattr(self, "filename_input"):
+            self.filename_input.setEnabled(True)
+        if status_text is not None and hasattr(self, "record_status_label"):
+            self.record_status_label.setText(status_text)
+        if was_recording and log_message:
+            self._log(log_message)
+
+    def _record_data(self):
+        """每秒收集一次所有通道数据并写入 Excel。"""
+        try:
+            row_data = {"时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+            for widget in self.channel_widgets:
+                status = widget.get_status()
+                ch = status["CH"]
+                mode = "输出" if status["Mode"] == "output" else "输入"
+                row_data[f"CH{ch}_模式"] = mode
+                row_data[f"CH{ch}_目标(dBm)"] = status["Target"]
+                row_data[f"CH{ch}_当前衰减(dB)"] = status["Attenuation"]
+                row_data[f"CH{ch}_OPM(dBm)"] = status["OPM"]
+                row_data[f"CH{ch}_输入功率(dBm)"] = status["InputPower"]
+
+            pm_powers = self.power_bridge.get_all_powers()
+            for index, power in enumerate(pm_powers, start=1):
+                row_data[f"功率计CH{index}(dBm)"] = power
+
+            df = pd.DataFrame([row_data])
+            if not os.path.exists(self.record_filepath):
+                df.to_excel(self.record_filepath, index=False, engine="openpyxl")
+            else:
+                existing = pd.read_excel(self.record_filepath, engine="openpyxl")
+                combined = pd.concat([existing, df], ignore_index=True)
+                combined.to_excel(self.record_filepath, index=False, engine="openpyxl")
+
+            self._record_row_count += 1
+            self.record_status_label.setText(f"记录中... 已记录 {self._record_row_count} 条")
+
+        except Exception as e:
+            self._log(f"记录数据失败: {e}")
+            self._stop_recording("记录失败，已停止")
     
     def _refresh_ports(self):
         """刷新串口列表"""
@@ -835,6 +992,12 @@ class MainWindow(QMainWindow):
     
     def _disconnect(self):
         """断开连接"""
+        if self.recording:
+            self._stop_recording(
+                f"已保存 {self._record_row_count} 条数据",
+                "设备已断开，自动停止数据存储",
+            )
+
         self.connected = False
         self._remove_channel_widgets()
         if self.jw8507:
@@ -860,6 +1023,12 @@ class MainWindow(QMainWindow):
     
     def _force_disconnect(self):
         """强制断开连接（不与设备通信，用于连接验证失败时）"""
+        if self.recording:
+            self._stop_recording(
+                f"已保存 {self._record_row_count} 条数据",
+                "连接已断开，自动停止数据存储",
+            )
+
         if self.ser:
             try:
                 self.ser.close()
@@ -1020,6 +1189,11 @@ class MainWindow(QMainWindow):
     
     def shutdown(self):
         """关闭串口、TCP服务并保存配置。"""
+        if self.recording:
+            self._stop_recording(
+                f"已保存 {self._record_row_count} 条数据",
+                "程序关闭，自动停止数据存储",
+            )
         if self.ser and self.ser.is_open:
             self._disconnect()
         if getattr(self, "tcp_server", None) is not None:
